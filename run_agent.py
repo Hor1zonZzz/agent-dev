@@ -3,18 +3,20 @@
 import asyncio
 import os
 
-from agents import Agent, Runner, SQLiteSession, set_tracing_disabled
+import tracing  # noqa: F401 — side-effect: registers Phoenix OTEL tracer
+
+from agents import Agent, Runner, SQLiteSession
 from dotenv import load_dotenv
 
 import mem_tools
 
 load_dotenv()
-set_tracing_disabled(True)
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
 
 # --- Conversation agent ---
+
 
 async def chat_instructions(_, __) -> str:
     base = "You are a concise, helpful assistant."
