@@ -11,3 +11,8 @@ wheels/
 
 # Environment
 .env
+
+# Local runtime data
+data/
+*.db
+ov.conf

@@ -1,0 +1,19 @@
+{
+  "storage": {
+    "workspace": "./data"
+  },
+  "vlm": {
+    "provider": "litellm",
+    "model": "openrouter/openai/gpt-4.1-mini",
+    "api_key": "YOUR_VLM_API_KEY"
+  },
+  "embedding": {
+    "dense": {
+      "provider": "openai",
+      "model": "openai/text-embedding-3-small",
+      "dimension": 1536,
+      "api_key": "YOUR_EMBEDDING_API_KEY",
+      "api_base": "https://openrouter.ai/api/v1"
+    }
+  }
+}
