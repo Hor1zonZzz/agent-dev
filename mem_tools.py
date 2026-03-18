@@ -105,9 +105,9 @@ async def _commit_and_split(split_idx: int | None = None) -> None:
 
 # --- Public API ---
 
-async def init() -> None:
-    """Initialize the backend."""
-    await mem_backend.init()
+async def init() -> str:
+    """Initialize the backend and return the shared session id."""
+    return await mem_backend.init()
 
 
 async def close() -> None:

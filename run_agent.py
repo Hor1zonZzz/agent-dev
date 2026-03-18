@@ -35,9 +35,9 @@ chat_agent = Agent(
 
 
 async def main() -> None:
-    await mem_tools.init()
-    session = SQLiteSession(session_id="default", db_path="chat.db")
-    print(f"Model: {MODEL} | Session: chat.db")
+    session_id = await mem_tools.init()
+    session = SQLiteSession(session_id=session_id, db_path="chat.db")
+    print(f"Model: {MODEL} | Session DB: chat.db | Session ID: {session_id}")
 
     try:
         while True:

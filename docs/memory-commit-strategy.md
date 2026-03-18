@@ -6,18 +6,20 @@
 
 不逐轮 commit，而是基于话题边界做语义分块提交。通过滑动窗口积累消息，LLM 检测话题转折点，在转折处切分并 commit，保证每次提交的记忆语义完整。
 
+当前实现使用单会话方案：应用启动时只创建一次 OpenViking session，后续多次向同一个 session `add_message()` 并重复 `commit_session(same_id)`。这个 `session_id` 同时传给 Agents SDK 的 `SQLiteSession`，两边共享同一个会话标识。
+
 ## 组件
 
 ### 1. 消息缓存
 
-存放所有未 commit 的消息，对应一个 OpenViking session。
+存放所有未 commit 的消息。缓存中的消息会批量写入同一个 OpenViking session。
 
 ```
 buffer = [m1(user), m2(assistant), m3(user), m4(assistant), ...]
 ```
 
 - 每轮对话产生 2 条消息（user + assistant）
-- 缓存中的消息已通过 `ov.add_message()` 写入当前 session，但未 commit
+- 缓存中的消息尚未写入 OpenViking；触发 commit 时再批量写入共享 session
 
 ### 2. 轮次计数器
 
@@ -62,7 +64,7 @@ MAX_EXPANSIONS = 4  # 最多扩容次数
                               check_count             commit 缓存中
                               > 上限？               pivot 之前的消息
                              /       \                    ↓
-                           是         否            开新 session
+                           是         否            保持同一 session
                            ↓          ↓             保留 pivot 及之后
                      强制 commit   继续积累          的消息到新缓存
                         全部                        重置 check_count
@@ -80,7 +82,7 @@ MAX_EXPANSIONS = 4  # 最多扩容次数
            → 第 10 轮触发 check
            → LLM 判断：pivot = 9（第 9 轮 user message 开始转折）
            → commit 轮次 1-8 的消息（16 条）
-           → 新 session，缓存保留轮次 9-10 的消息（4 条）
+           → 保留轮次 9-10 的消息（4 条）在缓存中
            → check_count 重置为 0
 ```
 
@@ -88,10 +90,10 @@ MAX_EXPANSIONS = 4  # 最多扩容次数
 
 | 操作 | OpenViking API |
 |------|---------------|
-| 初始化 session | `ov.create_session()` |
+| 初始化共享 session | `ov.create_session()` |
 | 写入消息 | `ov.add_message(sid, role, content)` |
 | 提交记忆 | `ov.commit_session(sid)` |
-| 开新 session | `ov.create_session()` + 重新 add 剩余消息 |
+| 后续提交 | 继续向同一个 `sid` `add_message()` 后再次 `commit_session(sid)` |
 | 检索记忆 | `ov.search(query, session_id=sid)` 或 `ov.find(query)` |
 
 ## 话题检测 LLM prompt 设计

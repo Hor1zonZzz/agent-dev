@@ -17,25 +17,36 @@ class MemoryResult:
 
 
 _ov: AsyncOpenViking | None = None
+_session_id: str | None = None
 
 
-async def init(config_path: str = "./ov.conf", data_path: str = "./data") -> None:
-    """Initialize OpenViking. Call once at startup."""
+async def init(config_path: str = "./ov.conf", data_path: str = "./data") -> str:
+    """Initialize OpenViking and create one shared session for this run."""
     os.environ.setdefault("OPENVIKING_CONFIG_FILE", config_path)
-    global _ov
+    global _ov, _session_id
+    if _ov is not None and _session_id is not None:
+        return _session_id
+
     _ov = AsyncOpenViking(path=data_path)
     await _ov.initialize()
+    session = await _ov.create_session()
+    session_id = session.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        raise RuntimeError("OpenViking returned an invalid session_id")
+    _session_id = session_id
+    return _session_id
 
 
 async def close() -> None:
-    global _ov
+    global _ov, _session_id
     if _ov:
         await _ov.close()
         _ov = None
+    _session_id = None
 
 
 async def commit(messages: list[dict]) -> int:
-    """Create a session, batch-write messages, commit, return memories extracted count.
+    """Write to the shared session, commit, return memories extracted count.
 
     Args:
         messages: [{"role": "user"|"assistant", "content": "..."}]
@@ -43,16 +54,15 @@ async def commit(messages: list[dict]) -> int:
     Returns:
         Number of memories extracted.
     """
-    if not _ov or not messages:
+    if not messages:
         return 0
-
-    session = await _ov.create_session()
-    sid = session["session_id"]
+    if not _ov or not _session_id:
+        raise RuntimeError("OpenViking is not initialized")
 
     for msg in messages:
-        await _ov.add_message(sid, role=msg["role"], content=msg["content"])
+        await _ov.add_message(_session_id, role=msg["role"], content=msg["content"])
 
-    result = await _ov.commit_session(sid)
+    result = await _ov.commit_session(_session_id)
     return result.get("memories_extracted", 0)
 
 
