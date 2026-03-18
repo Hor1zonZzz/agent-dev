@@ -6,15 +6,15 @@ import os
 import tracing  # noqa: F401 — side-effect: registers Phoenix OTEL tracer
 
 from agents import Agent, Runner, SQLiteSession
-from agents.mcp import MCPServer, MCPServerManager, MCPServerStreamableHttp
+from agents.mcp import MCPServer, MCPServerManager
 from dotenv import load_dotenv
 
 import mem_tools
+from mcp_servers import build_servers
 
 load_dotenv()
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-DEEPWIKI_MCP_URL = os.getenv("DEEPWIKI_MCP_URL", "https://mcp.deepwiki.com/mcp")
 
 
 # --- Conversation agent ---
@@ -40,18 +40,10 @@ def build_chat_agent(mcp_servers: list[MCPServer] | None = None) -> Agent:
     )
 
 
-def build_deepwiki_mcp_server() -> MCPServer:
-    return MCPServerStreamableHttp(
-        name="deepwiki",
-        params={"url": DEEPWIKI_MCP_URL},
-        cache_tools_list=True,
-    )
-
-
 async def main() -> None:
     session_id = await mem_tools.init()
     session = SQLiteSession(session_id=session_id, db_path="chat.db")
-    mcp_servers = [build_deepwiki_mcp_server()]
+    mcp_servers = build_servers()
 
     try:
         async with MCPServerManager(mcp_servers, strict=False) as manager:
