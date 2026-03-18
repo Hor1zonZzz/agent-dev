@@ -6,13 +6,15 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 import tracing
 from agents import Runner, SQLiteSession
 from agents.mcp import MCPServerManager
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import mem_tools
@@ -68,6 +70,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(lifespan=lifespan)
+UI_DIR = Path(__file__).resolve().parent / "ui"
 
 
 @app.get("/health")
@@ -128,3 +131,11 @@ async def chat_stream(payload: ChatStreamRequest, request: Request) -> Streaming
                 tracing.tracer_provider.force_flush()
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/")
+async def index() -> FileResponse:
+    return FileResponse(UI_DIR / "index.html")
+
+
+app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
