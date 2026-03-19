@@ -102,7 +102,8 @@ async def chat_stream(payload: ChatStreamRequest, request: Request) -> Streaming
 
     async def event_stream() -> AsyncIterator[str]:
         async with runtime.request_lock:
-            final_chunks: list[str] = []
+            messages: list[str] = []
+            tool_calls: dict[str, str] = {}  # call_id → tool_name
             result = Runner.run_streamed(
                 runtime.chat_agent,
                 payload.message,
@@ -113,17 +114,22 @@ async def chat_stream(payload: ChatStreamRequest, request: Request) -> Streaming
                 yield _sse_event("session", {"session_id": runtime.session_id})
 
                 async for event in result.stream_events():
-                    if event.type != "raw_response_event":
+                    if event.type != "run_item_stream_event":
                         continue
+                    raw = getattr(event.item, "raw_item", None)
+                    if event.name == "tool_called" and raw is not None:
+                        call_id = getattr(raw, "call_id", None) or (raw.get("call_id") if isinstance(raw, dict) else None)
+                        name = getattr(raw, "name", None) or (raw.get("name") if isinstance(raw, dict) else None)
+                        if call_id and name:
+                            tool_calls[call_id] = name
+                    elif event.name == "tool_output" and raw is not None:
+                        call_id = raw.get("call_id") if isinstance(raw, dict) else getattr(raw, "call_id", None)
+                        if call_id and tool_calls.get(call_id) == "response_to_user":
+                            text = event.item.output or ""
+                            messages.append(text)
+                            yield _sse_event("message", {"text": text})
 
-                    raw_event = event.data
-                    if raw_event.type == "response.output_text.delta" and raw_event.delta:
-                        final_chunks.append(raw_event.delta)
-                        yield _sse_event("delta", {"text": raw_event.delta})
-
-                final_output = str(result.final_output or "").strip() or "".join(final_chunks).strip()
-                if not final_output:
-                    raise RuntimeError("Agent returned an empty response")
+                final_output = "\n\n".join(messages).strip()
 
                 await mem_tools.on_turn(payload.message, final_output)
                 yield _sse_event(

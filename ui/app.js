@@ -58,7 +58,6 @@ async function streamChat(message) {
   setStatus("Streaming...");
 
   addMessage("user", message);
-  const agentBody = addMessage("assistant", "");
 
   try {
     const response = await fetch("/chat/stream", {
@@ -99,11 +98,9 @@ async function streamChat(message) {
         if (event === "session") {
           sessionId = payload.session_id;
           setStatus(`Connected: ${sessionId}`);
-        } else if (event === "delta") {
-          agentBody.textContent += payload.text ?? "";
-          chatEl.scrollTop = chatEl.scrollHeight;
+        } else if (event === "message") {
+          addMessage("assistant", payload.text ?? "");
         } else if (event === "done") {
-          agentBody.textContent = payload.final_output ?? agentBody.textContent;
           setStatus(`Ready: ${payload.session_id}`);
         } else if (event === "error") {
           throw new Error(payload.detail || "Streaming failed");
@@ -111,7 +108,7 @@ async function streamChat(message) {
       }
     }
   } catch (error) {
-    agentBody.textContent = `Error: ${error.message}`;
+    addMessage("assistant", `Error: ${error.message}`);
     setStatus("Request failed");
   } finally {
     isStreaming = false;
