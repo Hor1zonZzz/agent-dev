@@ -5,6 +5,8 @@ from __future__ import annotations
 from agents import RunConfig, SessionSettings
 from agents.items import TResponseInputItem
 
+# Maximum number of items to retrieve from session storage
+SESSION_ITEM_LIMIT = 20
 # Maximum number of user turns to keep (each turn = user msg + tool calls + assistant reply)
 MAX_TURNS = 10
 
@@ -35,5 +37,5 @@ def session_input_callback(
 def build_run_config() -> RunConfig:
     return RunConfig(
         session_input_callback=session_input_callback,
-        session_settings=SessionSettings(limit=MAX_TURNS * 10),
+        session_settings=SessionSettings(limit=SESSION_ITEM_LIMIT),
     )

@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import mem_tools
-from chat_agent import MODEL, build_chat_agent
+from crew import MODEL, build_chat_agent, build_memory_tool
 from context_policy import build_run_config
 from mcp_servers import build_servers
 
@@ -62,7 +62,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             session_id=session_id,
             session=session,
             active_servers=len(manager.active_servers),
-            chat_agent=build_chat_agent(manager.active_servers),
+            chat_agent=build_chat_agent(
+                manager.active_servers,
+                extra_tools=[build_memory_tool()],
+            ),
             run_config=run_config,
         )
         try:
