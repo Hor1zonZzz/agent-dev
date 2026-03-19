@@ -2,6 +2,12 @@
 
 当前后端是一个基于 FastAPI 的单会话聊天服务，入口文件为 [server.py](/Users/baai314/workspace/agent-dev/server.py)。
 
+内部模块边界：
+
+- [chat_agent.py](/Users/baai314/workspace/agent-dev/chat_agent.py)：agent 定义和指令拼装
+- [context_policy.py](/Users/baai314/workspace/agent-dev/context_policy.py)：会话上下文裁剪和 `RunConfig` 构建
+- [server.py](/Users/baai314/workspace/agent-dev/server.py)：HTTP/SSE 传输、单会话约束、运行时状态
+
 启动命令：
 
 ```bash
@@ -15,6 +21,8 @@ uv run uvicorn server:app --host 0.0.0.0 --port 8000
 - 客户端首次请求可以不传 `session_id`，服务端会在 SSE 的 `session` 事件中返回它。
 - 后续请求如果传入不同的 `session_id`，服务端会返回 `409 Conflict`。
 - 聊天接口是 SSE 流式返回，不提供普通 JSON 聊天接口。
+- Agents SDK 的 session 仍可保存完整历史，但每次模型调用只会发送最近 20 条 session item，再拼上当前请求的新输入。
+- 这里的 20 是 item 数，不是 turn 数。
 
 ## `GET /health`
 
@@ -63,6 +71,12 @@ Content-Type: application/json
 
 - `message`: 必填，非空字符串
 - `session_id`: 可选。首次请求可不传或传 `null`；后续请求应传服务端返回的值
+
+上下文行为：
+
+- 服务端继续复用同一个 `session_id` 管理整段会话。
+- 实际发给模型的输入由 `context_policy.py` 组装：最近 20 条历史 item + 本次新输入。
+- 这不会改变 SSE 协议，也不会改变客户端如何管理 `session_id`。
 
 成功响应头：
 

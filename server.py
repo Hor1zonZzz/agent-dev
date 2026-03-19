@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 import tracing
-from agents import Runner, SQLiteSession
+from agents import RunConfig, Runner, SQLiteSession
 from agents.mcp import MCPServerManager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -18,7 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import mem_tools
-from agent_runtime import MODEL, build_chat_agent
+from chat_agent import MODEL, build_chat_agent
+from context_policy import build_run_config
 from mcp_servers import build_servers
 
 
@@ -28,6 +29,7 @@ class RuntimeState:
     session: SQLiteSession
     active_servers: int
     chat_agent: Any
+    run_config: RunConfig
     request_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -53,6 +55,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     session_id = await mem_tools.init()
     session = SQLiteSession(session_id=session_id, db_path="chat.db")
     mcp_servers = build_servers()
+    run_config = build_run_config()
 
     async with MCPServerManager(mcp_servers, strict=False) as manager:
         app.state.runtime = RuntimeState(
@@ -60,6 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             session=session,
             active_servers=len(manager.active_servers),
             chat_agent=build_chat_agent(manager.active_servers),
+            run_config=run_config,
         )
         try:
             yield
@@ -99,6 +103,7 @@ async def chat_stream(payload: ChatStreamRequest, request: Request) -> Streaming
             result = Runner.run_streamed(
                 runtime.chat_agent,
                 payload.message,
+                run_config=runtime.run_config,
                 session=runtime.session,
             )
             try:

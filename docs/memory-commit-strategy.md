@@ -8,6 +8,13 @@
 
 当前实现使用单会话方案：应用启动时只创建一次 OpenViking session，后续多次向同一个 session `add_message()` 并重复 `commit_session(same_id)`。这个 `session_id` 同时传给 Agents SDK 的 `SQLiteSession`，两边共享同一个会话标识。
 
+需要注意：
+
+- OpenViking 的写入和 commit 流程保持不变。
+- Agents SDK 的 session 仍可保存完整历史 item。
+- 但每次真正发送给模型的上下文会先经过 `context_policy.py` 裁剪，只保留最近 20 条 session item，再拼接本轮新输入。
+- 这个裁剪是 item-based，不是按 user/assistant turn 裁剪。
+
 ## 组件
 
 ### 1. 消息缓存

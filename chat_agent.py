@@ -1,4 +1,4 @@
-"""Shared agent construction for the FastAPI service."""
+"""Shared chat agent definition for the FastAPI service."""
 
 from __future__ import annotations
 
