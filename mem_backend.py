@@ -66,6 +66,20 @@ async def commit(messages: list[dict]) -> int:
     return result.get("memories_extracted", 0)
 
 
+async def ls(uri: str = "viking://user/default/memories/") -> list[dict]:
+    """List entries under a Viking URI. Returns list of dicts with name, isDir, uri, etc."""
+    if not _ov:
+        return []
+    return await _ov.ls(uri)
+
+
+async def read(uri: str) -> str:
+    """Read a single file from the Viking filesystem."""
+    if not _ov:
+        return ""
+    return await _ov.read(uri)
+
+
 async def search(query: str, limit: int = 5) -> list[MemoryResult]:
     """Search memories by semantic query."""
     if not _ov:
