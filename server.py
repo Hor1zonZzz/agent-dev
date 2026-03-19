@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-import mem_tools
+import mem_manager
 from crew import MODEL, build_chat_agent, build_memory_tool
 from context_policy import build_run_config
 from mcp_servers import build_servers
@@ -52,7 +52,7 @@ def _get_runtime(request: Request) -> RuntimeState:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    session_id = await mem_tools.init()
+    session_id = await mem_manager.init()
     session = SQLiteSession(session_id=session_id, db_path="chat.db")
     mcp_servers = build_servers()
     run_config = build_run_config()
@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             yield
         finally:
             session.close()
-            await mem_tools.close()
+            await mem_manager.close()
             tracing.tracer_provider.force_flush()
 
 
@@ -131,7 +131,7 @@ async def chat_stream(payload: ChatStreamRequest, request: Request) -> Streaming
 
                 final_output = "\n\n".join(messages).strip()
 
-                await mem_tools.on_turn(payload.message, final_output)
+                await mem_manager.on_turn(payload.message, final_output)
                 yield _sse_event(
                     "done",
                     {
