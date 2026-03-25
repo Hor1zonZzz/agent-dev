@@ -61,16 +61,6 @@ async def health() -> dict[str, Any]:
     }
 
 
-def _drain_inbox(inbox: asyncio.Queue[str | None]) -> list[str]:
-    """Non-blocking drain of all pending user messages."""
-    messages: list[str] = []
-    while not inbox.empty():
-        msg = inbox.get_nowait()
-        if msg is not None:
-            messages.append(msg)
-    return messages
-
-
 @app.websocket("/ws")
 async def ws_chat(websocket: WebSocket) -> None:
     await websocket.accept()
@@ -128,16 +118,12 @@ async def ws_chat(websocket: WebSocket) -> None:
                     await asyncio.sleep(seconds)
                     await websocket.send_json({"type": "status", "status": "online"})
 
-                    new_messages = _drain_inbox(inbox)
-                    if new_messages:
-                        agent_input = "User sent new messages:\n" + "\n".join(new_messages)
-                        logger.info("Inbox has {} new message(s)", len(new_messages))
-                    else:
-                        agent_input = (
-                            "No new messages from user. "
-                            "You can proactively say something or call end_of_turn."
-                        )
-                        logger.info("Inbox empty, prompting agent for proactive action")
+                    # New user messages (if any) will be auto-injected by
+                    # call_model_input_filter before the next LLM call.
+                    agent_input = (
+                        "You are back after a pause. "
+                        "Decide whether to say something or call end_of_turn."
+                    )
                 else:
                     logger.info("Turn ended after {} run(s)", run_count)
                     break
