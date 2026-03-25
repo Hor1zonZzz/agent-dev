@@ -1,11 +1,10 @@
 const chatEl = document.getElementById("chat");
 const composerEl = document.getElementById("composer");
 const messageEl = document.getElementById("message");
-const sendEl = document.getElementById("send");
 const statusEl = document.getElementById("status");
 
+let ws = null;
 let sessionId = null;
-let isStreaming = false;
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -17,7 +16,7 @@ function addMessage(role, text) {
 
   const label = document.createElement("div");
   label.className = "label";
-  label.textContent = role === "user" ? "You" : "Agent";
+  label.textContent = role === "user" ? "You" : "Anna";
 
   const body = document.createElement("div");
   body.className = "body";
@@ -26,117 +25,52 @@ function addMessage(role, text) {
   item.append(label, body);
   chatEl.appendChild(item);
   chatEl.scrollTop = chatEl.scrollHeight;
-  return body;
 }
 
-function parseEventBlock(block) {
-  const lines = block.split("\n");
-  let event = "";
-  let data = "";
+function connect() {
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
-  for (const line of lines) {
-    if (line.startsWith("event: ")) {
-      event = line.slice(7);
-    } else if (line.startsWith("data: ")) {
-      data += line.slice(6);
+  ws.onopen = () => setStatus("Connected");
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+
+    switch (data.type) {
+      case "session":
+        sessionId = data.session_id;
+        setStatus("Online");
+        break;
+      case "message":
+        addMessage("assistant", data.text);
+        break;
+      case "status":
+        if (data.status === "typing") setStatus("Anna is typing...");
+        else if (data.status === "away") setStatus("Anna is away...");
+        else if (data.status === "online") setStatus("Online");
+        break;
     }
-  }
+  };
 
-  if (!event || !data) {
-    return null;
-  }
+  ws.onclose = () => {
+    setStatus("Disconnected. Reconnecting...");
+    setTimeout(connect, 3000);
+  };
 
-  return { event, payload: JSON.parse(data) };
+  ws.onerror = () => {
+    ws.close();
+  };
 }
 
-async function streamChat(message) {
-  if (isStreaming) return;
-
-  isStreaming = true;
-  sendEl.disabled = true;
-  messageEl.disabled = true;
-  setStatus("Streaming...");
-
-  addMessage("user", message);
-
-  try {
-    const response = await fetch("/chat/stream", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message,
-        session_id: sessionId,
-      }),
-    });
-
-    if (!response.ok || !response.body) {
-      const detail = await response.text();
-      throw new Error(detail || `Request failed with ${response.status}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-
-      while (buffer.includes("\n\n")) {
-        const splitIndex = buffer.indexOf("\n\n");
-        const block = buffer.slice(0, splitIndex);
-        buffer = buffer.slice(splitIndex + 2);
-
-        const parsed = parseEventBlock(block);
-        if (!parsed) continue;
-
-        const { event, payload } = parsed;
-        if (event === "session") {
-          sessionId = payload.session_id;
-          setStatus(`Connected: ${sessionId}`);
-        } else if (event === "message") {
-          addMessage("assistant", payload.text ?? "");
-        } else if (event === "done") {
-          setStatus(`Ready: ${payload.session_id}`);
-        } else if (event === "error") {
-          throw new Error(payload.detail || "Streaming failed");
-        }
-      }
-    }
-  } catch (error) {
-    addMessage("assistant", `Error: ${error.message}`);
-    setStatus("Request failed");
-  } finally {
-    isStreaming = false;
-    sendEl.disabled = false;
-    messageEl.disabled = false;
-    messageEl.focus();
-  }
-}
-
-async function checkHealth() {
-  try {
-    const response = await fetch("/health");
-    if (!response.ok) throw new Error("health check failed");
-    const payload = await response.json();
-    sessionId = payload.session_id;
-    setStatus(`Ready: ${sessionId}`);
-  } catch {
-    setStatus("Backend unavailable");
-  }
-}
-
-composerEl.addEventListener("submit", async (event) => {
+composerEl.addEventListener("submit", (event) => {
   event.preventDefault();
-  const message = messageEl.value.trim();
-  if (!message) return;
+  const text = messageEl.value.trim();
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
 
+  addMessage("user", text);
+  ws.send(JSON.stringify({ message: text }));
   messageEl.value = "";
-  await streamChat(message);
+  messageEl.focus();
 });
 
-checkHealth();
+connect();

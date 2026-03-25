@@ -30,7 +30,6 @@ def session_input_callback(
     turns = _split_turns(history)
     kept = turns[-MAX_TURNS:] if len(turns) > MAX_TURNS else turns
     result = [item for turn in kept for item in turn] + new_input
-    print(result)
     return result
 
 
