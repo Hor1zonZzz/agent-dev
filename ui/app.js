@@ -62,8 +62,7 @@ function connect() {
   };
 }
 
-composerEl.addEventListener("submit", (event) => {
-  event.preventDefault();
+function sendMessage() {
   const text = messageEl.value.trim();
   if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
 
@@ -71,6 +70,18 @@ composerEl.addEventListener("submit", (event) => {
   ws.send(JSON.stringify({ message: text }));
   messageEl.value = "";
   messageEl.focus();
+}
+
+composerEl.addEventListener("submit", (event) => {
+  event.preventDefault();
+  sendMessage();
+});
+
+messageEl.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    sendMessage();
+  }
 });
 
 connect();
