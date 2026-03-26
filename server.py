@@ -11,6 +11,7 @@ from typing import Any, AsyncIterator
 
 import tracing
 from agents import Runner, SQLiteSession
+from agents.memory import OpenAIResponsesCompactionSession
 from loguru import logger
 from agents.mcp import MCPServerManager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -20,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from agent_context import AgentContext
 from crew import MODEL, build_chat_agent
 from context_policy import build_run_config
+from hooks import CompanionHooks
 from mcp_servers import build_servers
 
 
@@ -67,9 +69,13 @@ async def ws_chat(websocket: WebSocket) -> None:
     runtime: RuntimeState = app.state.runtime
 
     session_id = uuid.uuid4().hex
-    session = SQLiteSession(session_id=session_id, db_path="chat.db")
+    sqlite_session = SQLiteSession(session_id=session_id, db_path="chat.db")
+    session = OpenAIResponsesCompactionSession(
+        session_id=session_id, underlying_session=sqlite_session,
+    )
     inbox: asyncio.Queue[str | None] = asyncio.Queue()
     ctx = AgentContext(websocket=websocket, inbox=inbox)
+    hooks = CompanionHooks()
 
     logger.info("WebSocket connected | session={}", session_id)
     await websocket.send_json({"type": "session", "session_id": session_id})
@@ -99,18 +105,16 @@ async def ws_chat(websocket: WebSocket) -> None:
             run_count = 0
             while True:
                 run_count += 1
-                logger.info("Agent run #{} start | input={}", run_count, agent_input[:80])
-                await websocket.send_json({"type": "status", "status": "typing"})
                 result = await Runner.run(
                     runtime.chat_agent,
                     agent_input,
                     context=ctx,
                     run_config=runtime.run_config,
                     session=session,
+                    hooks=hooks,
                 )
 
                 output = result.final_output or ""
-                logger.info("Agent run #{} end | output={}", run_count, output)
 
                 if output.startswith("defer:"):
                     seconds = int(output.split(":")[1])
@@ -132,7 +136,7 @@ async def ws_chat(websocket: WebSocket) -> None:
         pass
     finally:
         reader_task.cancel()
-        session.close()
+        sqlite_session.close()
         tracing.tracer_provider.force_flush()
 
 

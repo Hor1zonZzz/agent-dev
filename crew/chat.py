@@ -6,10 +6,11 @@ import os
 from pathlib import Path
 
 import yaml
-from agents import Agent, Tool
+from agents import Agent, RunContextWrapper, Tool
 from agents.mcp import MCPServer
 from dotenv import load_dotenv
 
+from agent_context import AgentContext
 from tools import send_message, defer_reply, end_of_turn
 
 load_dotenv()
@@ -27,7 +28,6 @@ def _load_persona(path: Path = PERSONA_PATH) -> dict:
 
 def _build_instructions(persona: dict) -> str:
     """Assemble the system prompt from persona config."""
-    name = persona["name"]
     identity = persona["identity"]
     personality = persona["personality"]
     style = persona["speaking_style"]
@@ -69,17 +69,29 @@ def _build_instructions(persona: dict) -> str:
 """
 
 
+def _dynamic_instructions(
+    ctx: RunContextWrapper[AgentContext], agent: Agent[AgentContext]
+) -> str:
+    """Build instructions dynamically from persona config.
+
+    Currently loads from YAML on each call.  In the future this can incorporate
+    runtime state from *ctx* (e.g. user mood, time-of-day greetings).
+    """
+    persona = _load_persona()
+    return _build_instructions(persona)
+
+
 def build_chat_agent(
     mcp_servers: list[MCPServer] | None = None,
     extra_tools: list[Tool] | None = None,
-) -> Agent:
+) -> Agent[AgentContext]:
     persona = _load_persona()
     tools: list[Tool] = [
         send_message, defer_reply, end_of_turn,
     ] + list(extra_tools or [])
-    return Agent(
+    return Agent[AgentContext](
         name=persona["name"],
-        instructions=_build_instructions(persona),
+        instructions=_dynamic_instructions,
         model=MODEL,
         tools=tools,
         tool_use_behavior={"stop_at_tool_names": ["end_of_turn", "defer_reply"]},
