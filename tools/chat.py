@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from agents import RunContextWrapper, function_tool
 
-from agent_context import AgentContext
-from guardrails import persona_check
+from core.context import AgentContext
+from tools.guardrails import persona_check
 
 
 @function_tool(tool_input_guardrails=[persona_check])
@@ -13,6 +13,7 @@ async def send_message(ctx: RunContextWrapper[AgentContext], message: str) -> st
     """Send a message to the user. Call this every time you want to say something.
     You can call it multiple times to send separate chat bubbles."""
     await ctx.context.websocket.send_json({"type": "message", "text": message})
+    ctx.context.record("assistant", message)
     return "Message sent."
 
 

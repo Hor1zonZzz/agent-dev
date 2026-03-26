@@ -8,4 +8,4 @@ from .deepwiki import build_server as build_deepwiki_server
 
 
 def build_servers() -> list[MCPServer]:
-    return [build_deepwiki_server()]
+    return []

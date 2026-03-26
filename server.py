@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-import tracing
+from core import tracing
 from agents import Runner, SQLiteSession
 from agents.memory import OpenAIResponsesCompactionSession
 from loguru import logger
@@ -18,10 +18,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from agent_context import AgentContext
-from crew import MODEL, build_chat_agent
-from context_policy import build_run_config
-from hooks import CompanionHooks
+from core import AgentContext, build_run_config, CompanionHooks
+from agnts import MODEL, build_orchestrator
 from mcp_servers import build_servers
 
 
@@ -40,7 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with MCPServerManager(mcp_servers, strict=False) as manager:
         app.state.runtime = RuntimeState(
             active_servers=len(manager.active_servers),
-            chat_agent=build_chat_agent(manager.active_servers),
+            chat_agent=build_orchestrator(manager.active_servers),
             run_config=run_config,
         )
         try:
@@ -103,9 +101,12 @@ async def ws_chat(websocket: WebSocket) -> None:
             # Agent loop: run → defer → run → ... → end_of_turn
             agent_input: str = message
             ctx.last_user_input = message
+            ctx.record("user", message)
+            logger.info("══ User message: {}", message[:100])
             run_count = 0
             while True:
                 run_count += 1
+                logger.info("── Orchestrator run #{} | input={}", run_count, agent_input[:100])
                 result = await Runner.run(
                     runtime.chat_agent,
                     agent_input,
@@ -119,9 +120,12 @@ async def ws_chat(websocket: WebSocket) -> None:
 
                 if output.startswith("defer:"):
                     seconds = int(output.split(":")[1])
-                    logger.info("Defer triggered | waiting {}s", seconds)
+                    logger.info("── Defer | {}s, checking inbox after sleep", seconds)
                     await asyncio.sleep(seconds)
                     await websocket.send_json({"type": "status", "status": "online"})
+
+                    pending = inbox.qsize()
+                    logger.info("── Back online | {} pending message(s) in inbox", pending)
 
                     # New user messages (if any) will be auto-injected by
                     # call_model_input_filter before the next LLM call.
@@ -130,7 +134,7 @@ async def ws_chat(websocket: WebSocket) -> None:
                         "Decide whether to say something or call end_of_turn."
                     )
                 else:
-                    logger.info("Turn ended after {} run(s)", run_count)
+                    logger.info("══ Turn ended after {} run(s)", run_count)
                     break
 
     except WebSocketDisconnect:

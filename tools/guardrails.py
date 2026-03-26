@@ -15,13 +15,14 @@ from agents.tool_guardrails import (
     tool_input_guardrail,
 )
 
-PERSONA_PATH = Path(__file__).resolve().parent / "persona.yaml"
+PERSONA_PATH = Path(__file__).resolve().parent.parent / "personas" / "muse.yaml"
 CHECKER_MODEL = "gpt-5-mini"
 
 
 class PersonaCheckResult(BaseModel):
     breaking_character: bool
     reason: str
+    suggested_reply: str
 
 
 def _load_persona_identity() -> str:
@@ -29,14 +30,15 @@ def _load_persona_identity() -> str:
         persona = yaml.safe_load(f)
     name = persona["name"]
     identity = persona["identity"]
+    traits = "\n".join(f"- {t}" for t in persona["personality"]["traits"])
     avoid = "\n".join(f"- {a}" for a in persona["speaking_style"]["avoid"])
-    return f"角色名：{name}\n设定：{identity}\n\n绝对不要：\n{avoid}"
+    return f"角色名：{name}\n设定：{identity}\n\n性格特点：\n{traits}\n\n绝对不要：\n{avoid}"
 
 
 _checker_agent = Agent(
     name="PersonaChecker",
     instructions=f"""\
-你是一个角色扮演质检员。你会收到"用户说了什么"和"角色回复了什么"，请结合对话上下文判断角色的回复是否"穿帮"。
+你是一个角色扮演质检员。你会收到最近的对话记录和角色待发送的回复，判断回复是否"穿帮"。
 
 {_load_persona_identity()}
 
@@ -56,10 +58,25 @@ _checker_agent = Agent(
 - 角色性格内的任何表达
 - 开玩笑说自己是机器人（明显在玩梗不是认真的）
 - 说"我要去忙了"、"我先离开一下"等符合真人行为的表述（即使实际是在调用延迟工具）
+
+如果穿帮了，你必须在 suggested_reply 中给出一条符合角色人设的替代回复。\
+替代回复要自然地回应用户说的内容，保持角色的语气和性格。\
+如果没穿帮，suggested_reply 留空字符串。
 """,
     model=CHECKER_MODEL,
     output_type=PersonaCheckResult,
 )
+
+
+def _format_recent_context(recent: list[tuple[str, str]]) -> str:
+    """Format recent messages as readable context."""
+    if not recent:
+        return ""
+    lines = []
+    for role, text in recent:
+        label = "用户" if role == "user" else "角色"
+        lines.append(f"{label}：{text}")
+    return "\n".join(lines)
 
 
 @tool_input_guardrail
@@ -71,18 +88,21 @@ async def persona_check(data: ToolInputGuardrailData) -> ToolGuardrailFunctionOu
     if not message:
         return ToolGuardrailFunctionOutput.allow()
 
-    user_input = getattr(data.context.context, "last_user_input", "") or ""
-    checker_input = (
-        f"用户说：{user_input}\n角色回复：{message}"
-        if user_input
-        else f"角色回复：{message}"
-    )
+    ctx = data.context.context
+    recent = getattr(ctx, "recent_messages", []) or []
+    context_block = _format_recent_context(recent)
+
+    checker_input = ""
+    if context_block:
+        checker_input += f"最近对话：\n{context_block}\n\n"
+    checker_input += f"待检查的回复：{message}"
 
     result = await Runner.run(_checker_agent, checker_input)
     check: PersonaCheckResult = result.final_output
 
     if check.breaking_character:
         return ToolGuardrailFunctionOutput.reject_content(
-            f"穿帮被拦截：{check.reason}。请用符合角色人设的方式重新表达，不要提及AI身份。"
+            f"[系统拦截] 这条回复穿帮了，不要发送。"
+            f"建议你改为发送：{check.suggested_reply}"
         )
     return ToolGuardrailFunctionOutput.allow()

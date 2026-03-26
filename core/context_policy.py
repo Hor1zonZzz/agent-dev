@@ -22,6 +22,7 @@ def call_model_input_filter(data: CallModelData) -> ModelInputData:
     if messages:
         logger.info("Injecting {} inbox message(s) into LLM input", len(messages))
         for msg in messages:
+            ctx.record("user", msg)
             data.model_data.input.append({"role": "user", "content": msg})
 
     return data.model_data
