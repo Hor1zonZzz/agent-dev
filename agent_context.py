@@ -12,3 +12,4 @@ from fastapi import WebSocket
 class AgentContext:
     websocket: WebSocket
     inbox: asyncio.Queue[str | None] = field(default_factory=asyncio.Queue)
+    last_user_input: str = ""

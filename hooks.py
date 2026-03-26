@@ -25,9 +25,10 @@ class CompanionHooks(RunHooks[AgentContext]):
     async def on_tool_start(
         self, context: RunContextWrapper[AgentContext], agent: Agent[AgentContext], tool: Tool
     ) -> None:
-        logger.info("Tool start | {}", tool.name)
+        args = getattr(context, "tool_arguments", None) or ""
+        logger.info("Tool start | {} args={}", tool.name, args[:120])
 
     async def on_tool_end(
         self, context: RunContextWrapper[AgentContext], agent: Agent[AgentContext], tool: Tool, result: str
     ) -> None:
-        logger.info("Tool end | {} result={}", tool.name, str(result)[:80])
+        logger.info("Tool end | {} result={}", tool.name, str(result)[:120])

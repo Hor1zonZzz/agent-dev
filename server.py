@@ -102,6 +102,7 @@ async def ws_chat(websocket: WebSocket) -> None:
 
             # Agent loop: run → defer → run → ... → end_of_turn
             agent_input: str = message
+            ctx.last_user_input = message
             run_count = 0
             while True:
                 run_count += 1
