@@ -24,7 +24,7 @@ INSTRUCTIONS = """\
 你自己不跟用户说话。
 
 你有三个工具：
-- chat：让角色回复用户。把用户的原话传给她，不要改写、总结或添加指令。
+- chat：让角色回复用户。不需要传任何参数，角色会自动看到用户的消息。
   返回值是最近的对话记录，用来帮助你做下一步决策。
 - defer_reply：暂停一会儿。暂停后你会被再次调用，可以继续聊或结束。
 - end_of_turn：本轮彻底结束，等用户下次发消息。
@@ -48,7 +48,7 @@ INSTRUCTIONS = """\
 _conversation_agent = build_conversation_agent()
 
 
-def _build_input_list(recent: list[tuple[str, str]], message: str) -> list[dict]:
+def _build_input_list(recent: list[tuple[str, str]]) -> list[dict]:
     """Build a Responses API input list from recent_messages.
 
     Converts (role, text) pairs into proper input items so the conversation
@@ -74,42 +74,32 @@ def _build_input_list(recent: list[tuple[str, str]], message: str) -> list[dict]
                 "output": "Message sent.",
             })
 
-    # If the last entry is already this user message, don't duplicate
-    last_user = None
-    for r, t in reversed(recent):
-        if r == "user":
-            last_user = t
-            break
-
-    if not input_list or last_user != message:
-        input_list.append({"role": "user", "content": message})
-
     return input_list
 
 
 @function_tool
-async def chat(ctx: RunContextWrapper[AgentContext], message: str) -> str:
-    """让角色回复用户。把用户消息传给她，她会通过 send_message 发送回复。
+async def chat(ctx: RunContextWrapper[AgentContext]) -> str:
+    """让角色回复用户。不需要任何参数，角色会自动看到用户的消息。
     返回值是最近的对话记录，帮助你做决策。"""
-    input_list = _build_input_list(ctx.context.recent_messages, message)
+    input_list = _build_input_list(ctx.context.recent_messages)
 
     logger.info("│  chat tool → Muse input: {} items", len(input_list))
 
     await Runner.run(
         _conversation_agent,
-        input_list,
+        input_list,  # type: ignore[arg-type]
         context=ctx.context,
     )
 
     # Return recent messages so orchestrator can see what happened
     recent = ctx.context.recent_messages
     if not recent:
-        return "（没有对话记录）"
+        return "<context>（没有对话记录）</context>"
     lines = []
     for role, text in recent:
-        label = "用户" if role == "user" else "角色"
-        lines.append(f"{label}：{text}")
-    return "\n".join(lines)
+        tag = "user" if role == "user" else "agent"
+        lines.append(f"<{tag}>{text}</{tag}>")
+    return f"<context>\n{''.join(lines)}\n</context>"
 
 
 def build_orchestrator(
