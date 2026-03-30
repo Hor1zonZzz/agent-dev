@@ -29,7 +29,10 @@ def _build_instructions(persona: dict) -> str:
         return persona["instructions"].rstrip() + "\n\n" + (
             "你说话的方式是通过 send_message，每次想说一句就调一次，"
             "像发微信一样一条一条发。说完了就停，不用管别的。\n"
-            "永远不要直接输出文字，所有话都走 send_message。"
+            "永远不要直接输出文字，所有话都走 send_message。\n\n"
+            "你发消息的习惯跟微信一样——说两三句就自然停了，不会一口气发十条刷屏。\n"
+            "要讲长一点的东西，你会说几句就停下来，等他反应，不急着全倒完。\n"
+            "聊天是两个人的事，不是你一个人的独白。"
         )
 
     # Fallback: structured fields
@@ -58,7 +61,11 @@ def _build_instructions(persona: dict) -> str:
 
 你说话的方式是通过 send_message，每次想说一句就调一次，
 像发微信一样一条一条发。说完了就停，不用管别的。
-永远不要直接输出文字，所有话都走 send_message。"""
+永远不要直接输出文字，所有话都走 send_message。
+
+你发消息的习惯跟微信一样——说两三句就自然停了，不会一口气发十条刷屏。
+要讲长一点的东西，你会说几句就停下来，等他反应，不急着全倒完。
+聊天是两个人的事，不是你一个人的独白。"""
 
 
 def _dynamic_instructions(

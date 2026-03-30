@@ -24,7 +24,10 @@ INSTRUCTIONS = """\
 你自己不跟用户说话。
 
 你有三个工具：
-- chat：让角色回复用户。不需要传任何参数，角色会自动看到用户的消息。
+- chat(hint?)：让角色回复用户。
+  hint 是可选的情境提示，告诉角色当前处于什么情况。
+  例如：chat(hint="用户等了一会儿没说话") 或 chat(hint="用户又发了新消息")
+  不传 hint 时角色正常回复。
   返回值是最近的对话记录，用来帮助你做下一步决策。
 - defer_reply：暂停一会儿。暂停后你会被再次调用，可以继续聊或结束。
 - end_of_turn：本轮彻底结束，等用户下次发消息。
@@ -33,8 +36,8 @@ INSTRUCTIONS = """\
 1. 收到用户消息 → 先调用 chat 让角色回复
 2. chat 返回后 → 调用 defer_reply(2~5秒)，制造自然停顿
 3. 暂停回来后 → 看情况：
-   - 有新用户消息 → 再调 chat
-   - 没有新消息 → 可以再调一次 chat 让角色主动说点什么，或调 end_of_turn 结束
+   - 有新用户消息 → 调 chat(hint="用户又发了新消息") 让角色回应
+   - 没有新消息 → 可以调 chat(hint="用户暂时没说话，你可以再补一句或者结束") 或直接 end_of_turn
 
 什么时候直接 end_of_turn（跳过 defer）：
 - 用户只发了语气词/表情（嗯、哦、哈哈、👍）
@@ -78,17 +81,25 @@ def _build_input_list(recent: list[tuple[str, str]]) -> list[dict]:
 
 
 @function_tool
-async def chat(ctx: RunContextWrapper[AgentContext]) -> str:
-    """让角色回复用户。不需要任何参数，角色会自动看到用户的消息。
-    返回值是最近的对话记录，帮助你做决策。"""
+async def chat(ctx: RunContextWrapper[AgentContext], hint: str = "") -> str:
+    """让角色回复用户。
+    hint: 可选的情境提示，如 "用户等了一会儿没说话"、"用户刚发了新消息"。
+    不传 hint 则角色正常回复。返回值是最近的对话记录，帮助你做决策。"""
     input_list = _build_input_list(ctx.context.recent_messages)
 
-    logger.info("│  chat tool → Muse input: {} items", len(input_list))
+    if hint:
+        input_list.append({
+            "role": "developer",
+            "content": f"【情境】{hint}",
+        })
+
+    logger.info("│  chat tool → conversation input: {} items, hint={}", len(input_list), hint[:50] if hint else "none")
 
     await Runner.run(
         _conversation_agent,
         input_list,  # type: ignore[arg-type]
         context=ctx.context,
+        max_turns=5,
     )
 
     # Return recent messages so orchestrator can see what happened
