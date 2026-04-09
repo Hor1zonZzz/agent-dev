@@ -1,3 +1,4 @@
-from .chat import send_message, defer_reply, end_of_turn
+from .edit_prompt import edit_prompt
+from .send_message import send_message
 
-__all__ = ["send_message", "defer_reply", "end_of_turn"]
+__all__ = ["edit_prompt", "send_message"]
