@@ -50,7 +50,13 @@ async def run(
 
     # Build system message
     instructions = agent.instructions(ctx) if callable(agent.instructions) else agent.instructions
-    messages: list[dict] = [{"role": "system", "content": instructions}] + list(input)
+
+    # Strip reasoning_content from previous turns to save tokens
+    cleaned_input = [
+        {k: v for k, v in msg.items() if k != "reasoning_content"}
+        for msg in input
+    ]
+    messages: list[dict] = [{"role": "system", "content": instructions}] + cleaned_input
 
     # Build tool definitions
     tool_map = {t.name: t for t in agent.tools}
@@ -75,6 +81,8 @@ async def run(
                 for msg in pending:
                     ctx.record("user", msg)
                     messages.append({"role": "user", "content": msg})
+
+        logger.debug("Request messages:\n{}", json.dumps(messages, ensure_ascii=False, indent=2))
 
         response = await client.chat.completions.create(
             model=agent.model,

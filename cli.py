@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 from core.loop import Agent, run
 from prompts import build
-from tools import send_message, edit_prompt
+from tools import end_turn, send_message
 
 load_dotenv()
 
@@ -19,8 +19,8 @@ agent = Agent(
     name="anna",
     instructions=lambda _ctx: build(),
     model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-    tools=[send_message, edit_prompt],
-    stop_at={"send_message"},
+    tools=[send_message, end_turn],
+    stop_at={"end_turn"},
 )
 
 
