@@ -3,15 +3,17 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 from core.loop import Agent, run
-from core.hooks import Hooks
 from prompts import build
 from tools import send_message, edit_prompt
 
 load_dotenv()
+
+HISTORY_PATH = Path(__file__).parent / "history" / "cli.json"
 
 agent = Agent(
     name="anna",
@@ -37,8 +39,21 @@ class CLIHooks:
         print(f"  [tool] → {result}")
 
 
+def load_history() -> list[dict]:
+    if HISTORY_PATH.exists():
+        data = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
+        print(f"Loaded {len(data)} messages from history.\n")
+        return data
+    return []
+
+
+def save_history(messages: list[dict]) -> None:
+    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    HISTORY_PATH.write_text(json.dumps(messages, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 async def main():
-    messages: list[dict] = []
+    messages = load_history()
     hooks = CLIHooks()
     print("Interactive agent loop (Ctrl+C to quit)\n")
 
@@ -55,8 +70,8 @@ async def main():
         messages.append({"role": "user", "content": user_input})
         result = await run(agent, messages, hooks=hooks)
         messages = result.messages[1:]  # strip system message for next round
+        save_history(messages)
 
-        # Only print text output if the model replied without tools
         if result.last_tool is None and result.final_output:
             print(f"Anna: {result.final_output}\n")
         else:

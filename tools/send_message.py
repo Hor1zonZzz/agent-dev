@@ -12,7 +12,6 @@ class SendMessageParams(BaseModel):
 
 
 def _send_message(message: str) -> str:
-    print(f"Anna: {message}")
     return "Message sent."
 
 
