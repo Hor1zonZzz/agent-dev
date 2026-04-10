@@ -7,6 +7,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from core.context import AgentContext
 from core.loop import Agent, run
 from prompts import build
 from tools import end_turn, send_message
@@ -52,9 +53,14 @@ def save_history(messages: list[dict]) -> None:
     HISTORY_PATH.write_text(json.dumps(messages, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+async def _print_reply(text: str) -> None:
+    print(f"Anna: {text}")
+
+
 async def main():
     messages = load_history()
     hooks = CLIHooks()
+    ctx = AgentContext(send_reply=_print_reply)
     print("Interactive agent loop (Ctrl+C to quit)\n")
 
     while True:
@@ -68,7 +74,7 @@ async def main():
             continue
 
         messages.append({"role": "user", "content": user_input})
-        result = await run(agent, messages, hooks=hooks)
+        result = await run(agent, messages, ctx=ctx, hooks=hooks)
         messages = result.messages[1:]  # strip system message for next round
         save_history(messages)
 

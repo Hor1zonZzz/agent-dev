@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Protocol
 
 from loguru import logger
 
@@ -20,11 +20,10 @@ class Hooks(Protocol):
 
 
 class CompanionHooks:
-    """Concrete hooks: push WebSocket status + structured logging."""
+    """Concrete hooks: structured logging for the agent loop."""
 
     async def on_agent_start(self, agent_name: str, ctx: AgentContext) -> None:
         logger.info("┌─ Agent START | {}", agent_name)
-        await ctx.websocket.send_json({"type": "status", "status": "typing"})
 
     async def on_agent_end(self, agent_name: str, output: str, ctx: AgentContext) -> None:
         preview = output.replace("\n", "\\n")[:120]

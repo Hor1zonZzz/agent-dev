@@ -11,7 +11,9 @@ class SendMessageParams(BaseModel):
     message: str = Field(description="The message text to send to the user.")
 
 
-def _send_message(message: str) -> str:
+async def _send_message(ctx, message: str) -> str:
+    if ctx and getattr(ctx, "send_reply", None):
+        await ctx.send_reply(message)
     return "Message sent."
 
 
