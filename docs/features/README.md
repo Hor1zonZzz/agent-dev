@@ -1,0 +1,16 @@
+# 功能索引
+
+本目录记录已完成的功能，每个文件只列 **功能名 + 涉及的代码位置**，不写实现细节。
+
+| 功能 | 文件 |
+|---|---|
+| Agent 主循环 | [agent-loop.md](agent-loop.md) |
+| 工具系统 | [tools.md](tools.md) |
+| Prompt 组装 | [prompt-build.md](prompt-build.md) |
+| 对话历史持久化 | [history-persistence.md](history-persistence.md) |
+| Memory 压缩 | [memory-compression.md](memory-compression.md) |
+| 生命周期 Hooks | [hooks.md](hooks.md) |
+| CLI 入口 | [cli-entry.md](cli-entry.md) |
+| 微信 ClawBot 入口 | [wechat-entry.md](wechat-entry.md) |
+| 并发消息处理（Inbox 中断） | [concurrent-dispatch.md](concurrent-dispatch.md) |
+| 测试 | [tests.md](tests.md) |

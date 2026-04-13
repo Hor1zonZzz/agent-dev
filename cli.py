@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from core.context import AgentContext
 from core.loop import Agent, run
+from core.memory import append_to_history, load_for_llm, maybe_compress
 from prompts import build
 from tools import end_turn, send_message
 
@@ -18,7 +19,7 @@ HISTORY_PATH = Path(__file__).parent / "history" / "cli.json"
 
 agent = Agent(
     name="anna",
-    instructions=lambda _ctx: build(),
+    instructions=lambda ctx: build(memory=ctx.memory if ctx else None),
     model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
     tools=[send_message, end_turn],
     stop_at={"end_turn"},
@@ -40,27 +41,13 @@ class CLIHooks:
         print(f"  [tool] → {result}")
 
 
-def load_history() -> list[dict]:
-    if HISTORY_PATH.exists():
-        data = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
-        print(f"Loaded {len(data)} messages from history.\n")
-        return data
-    return []
-
-
-def save_history(messages: list[dict]) -> None:
-    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    HISTORY_PATH.write_text(json.dumps(messages, ensure_ascii=False, indent=2), encoding="utf-8")
-
 
 async def _print_reply(text: str) -> None:
     print(f"Anna: {text}")
 
 
 async def main():
-    messages = load_history()
     hooks = CLIHooks()
-    ctx = AgentContext(send_reply=_print_reply)
     print("Interactive agent loop (Ctrl+C to quit)\n")
 
     while True:
@@ -73,15 +60,25 @@ async def main():
         if not user_input.strip():
             continue
 
-        messages.append({"role": "user", "content": user_input})
-        result = await run(agent, messages, ctx=ctx, hooks=hooks)
-        messages = result.messages[1:]  # strip system message for next round
-        save_history(messages)
+        # Load recent window + memory summary from disk
+        recent, memory_text = load_for_llm(HISTORY_PATH)
+        recent.append({"role": "user", "content": user_input})
+        n_from_disk = len(recent) - 1
+
+        ctx = AgentContext(send_reply=_print_reply, memory=memory_text)
+        result = await run(agent, recent, ctx=ctx, hooks=hooks)
+
+        # Append only this turn's new messages to the archive
+        new_this_turn = result.messages[1 + n_from_disk:]
+        append_to_history(HISTORY_PATH, new_this_turn)
 
         if result.last_tool is None and result.final_output:
             print(f"Anna: {result.final_output}\n")
         else:
             print()
+
+        # Non-blocking background compression check
+        await maybe_compress(HISTORY_PATH)
 
 
 if __name__ == "__main__":

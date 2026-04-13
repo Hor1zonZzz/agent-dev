@@ -12,3 +12,4 @@ class AgentContext:
     inbox: asyncio.Queue[str | None] = field(default_factory=asyncio.Queue)
     last_user_input: str = ""
     send_reply: Callable[[str], Awaitable[None]] | None = None
+    memory: str | None = None

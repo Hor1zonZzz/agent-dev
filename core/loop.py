@@ -79,7 +79,6 @@ async def run(
             if pending:
                 logger.info("Injecting {} inbox message(s) into LLM input", len(pending))
                 for msg in pending:
-                    ctx.record("user", msg)
                     messages.append({"role": "user", "content": msg})
 
         logger.debug("Request messages:\n{}", json.dumps(messages, ensure_ascii=False, indent=2))
