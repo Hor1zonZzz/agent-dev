@@ -13,4 +13,5 @@
 | CLI 入口 | [cli-entry.md](cli-entry.md) |
 | 微信 ClawBot 入口 | [wechat-entry.md](wechat-entry.md) |
 | 并发消息处理（Inbox 中断） | [concurrent-dispatch.md](concurrent-dispatch.md) |
+| 时间感知 | [time-awareness.md](time-awareness.md) |
 | 测试 | [tests.md](tests.md) |

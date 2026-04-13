@@ -127,7 +127,60 @@ def load_for_llm(history_path: Path) -> tuple[list[dict], str | None]:
 
     memory_text = load_latest_summary()
     recent = full[-RECENT_K:] if full else []
+    recent = _trim_orphan_tool_prefix(recent)
     return recent, memory_text
+
+
+def _trim_orphan_tool_prefix(messages: list[dict]) -> list[dict]:
+    """Drop leading ``role=tool`` messages whose matching ``tool_calls`` got
+    sliced out of the window. OpenAI-compatible APIs reject histories where a
+    tool response has no preceding ``assistant`` message with ``tool_calls``.
+    """
+    i = 0
+    while i < len(messages) and messages[i].get("role") == "tool":
+        i += 1
+    return messages[i:]
+
+
+# ── Sidecar meta (last_activity_at, etc.) ────────────────────────────
+
+
+def _meta_path(history_path: Path) -> Path:
+    """Return the sibling ``.meta.json`` path for a history file."""
+    return history_path.with_suffix(".meta.json")
+
+
+def load_meta(history_path: Path) -> dict:
+    p = _meta_path(history_path)
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("Failed to read meta at {}, ignoring", p)
+        return {}
+
+
+def save_meta(history_path: Path, meta: dict) -> None:
+    p = _meta_path(history_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_last_activity(history_path: Path) -> datetime | None:
+    s = load_meta(history_path).get("last_activity_at")
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def update_last_activity(history_path: Path, when: datetime | None = None) -> None:
+    meta = load_meta(history_path)
+    meta["last_activity_at"] = (when or datetime.now()).isoformat()
+    save_meta(history_path, meta)
 
 
 def append_to_history(history_path: Path, new_messages: list[dict]) -> None:

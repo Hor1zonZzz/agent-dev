@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -30,7 +31,14 @@ from wechat_clawbot.monitor.monitor import MonitorOpts, monitor_weixin_provider
 
 from core.context import AgentContext
 from core.loop import Agent, run
-from core.memory import append_to_history, load_for_llm, maybe_compress
+from core.memory import (
+    append_to_history,
+    get_last_activity,
+    load_for_llm,
+    maybe_compress,
+    update_last_activity,
+)
+from core.time_hint import format_gap_hint
 from prompts import build
 from tools import end_turn, send_message
 
@@ -124,48 +132,78 @@ def _build_reply_fn(user_id: str, context_token: str | None):
 
 
 async def worker() -> None:
-    """Consume messages one turn at a time."""
+    """Consume messages one turn at a time.
+
+    The outer try/except keeps the worker alive across per-iteration failures
+    (bad history, LLM 4xx, network blips). Without it, a single unhandled
+    exception would kill the task silently — it's never awaited — and subsequent
+    messages would queue forever with no response.
+    """
     global _active_ctx
 
     while True:
-        user_id, first_text, ctx_token = await _inbox.get()
-
-        # Greedily batch any messages already queued (zero-delay merge).
-        batch_texts = [first_text]
-        while not _inbox.empty():
-            _, other_text, other_token = _inbox.get_nowait()
-            batch_texts.append(other_text)
-            ctx_token = other_token or ctx_token  # keep freshest token
-
-        history_path = _history_path(user_id)
-        recent, memory_text = load_for_llm(history_path)
-        for t in batch_texts:
-            recent.append({"role": "user", "content": t})
-        n_from_disk = len(recent) - len(batch_texts)
-
-        ctx = AgentContext(
-            send_reply=_build_reply_fn(user_id, ctx_token),
-            memory=memory_text,
-        )
-        _active_ctx = ctx
         try:
-            result = await run(agent, recent, ctx=ctx, hooks=_hooks)
-            new_this_turn = result.messages[1 + n_from_disk:]
-            append_to_history(history_path, new_this_turn)
-        finally:
-            # IMPORTANT: history is written BEFORE clearing _active_ctx, so
-            # any message that slipped into ctx.inbox during append_to_history
-            # will find a fully-persisted history when the next run loads it.
+            await _run_one_iteration()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
             _active_ctx = None
+            logger.exception("[wechat] Worker iteration failed; continuing")
 
-        # Salvage mid-run stragglers (put into ctx.inbox between last turn's
-        # inbox-drain and _active_ctx = None) back onto the global queue.
-        while not ctx.inbox.empty():
-            leftover = ctx.inbox.get_nowait()
-            if leftover is not None:
-                _inbox.put_nowait((user_id, leftover, ctx_token))
 
-        await maybe_compress(history_path)
+async def _run_one_iteration() -> None:
+    global _active_ctx
+
+    user_id, first_text, ctx_token = await _inbox.get()
+
+    # Greedily batch any messages already queued (zero-delay merge).
+    batch_texts = [first_text]
+    while not _inbox.empty():
+        _, other_text, other_token = _inbox.get_nowait()
+        batch_texts.append(other_text)
+        ctx_token = other_token or ctx_token  # keep freshest token
+
+    history_path = _history_path(user_id)
+    recent, memory_text = load_for_llm(history_path)
+
+    # Gap hint: compare now to last_activity_at; prepend only to the first
+    # message of this batch. Mid-run inbox messages are not tagged —
+    # they're inherently rapid, so a hint would be noise.
+    last_activity = get_last_activity(history_path)
+    gap_hint = format_gap_hint(datetime.now() - last_activity) if last_activity else None
+
+    for i, t in enumerate(batch_texts):
+        content = f"{gap_hint}\n{t}" if (i == 0 and gap_hint) else t
+        recent.append({"role": "user", "content": content})
+    n_from_disk = len(recent) - len(batch_texts)
+
+    ctx = AgentContext(
+        send_reply=_build_reply_fn(user_id, ctx_token),
+        memory=memory_text,
+    )
+    _active_ctx = ctx
+    try:
+        result = await run(agent, recent, ctx=ctx, hooks=_hooks)
+        new_this_turn = result.messages[1 + n_from_disk:]
+        # Strip gap hint from persisted history — it's a per-run annotation.
+        if gap_hint and new_this_turn and new_this_turn[0].get("role") == "user":
+            new_this_turn[0] = {**new_this_turn[0], "content": batch_texts[0]}
+        append_to_history(history_path, new_this_turn)
+        update_last_activity(history_path)
+    finally:
+        # IMPORTANT: history is written BEFORE clearing _active_ctx, so
+        # any message that slipped into ctx.inbox during append_to_history
+        # will find a fully-persisted history when the next run loads it.
+        _active_ctx = None
+
+    # Salvage mid-run stragglers (put into ctx.inbox between last turn's
+    # inbox-drain and _active_ctx = None) back onto the global queue.
+    while not ctx.inbox.empty():
+        leftover = ctx.inbox.get_nowait()
+        if leftover is not None:
+            _inbox.put_nowait((user_id, leftover, ctx_token))
+
+    await maybe_compress(history_path)
 
 
 # ---------------------------------------------------------------------------

@@ -3,13 +3,21 @@
 import asyncio
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from core.context import AgentContext
 from core.loop import Agent, run
-from core.memory import append_to_history, load_for_llm, maybe_compress
+from core.memory import (
+    append_to_history,
+    get_last_activity,
+    load_for_llm,
+    maybe_compress,
+    update_last_activity,
+)
+from core.time_hint import format_gap_hint
 from prompts import build
 from tools import end_turn, send_message
 
@@ -62,15 +70,25 @@ async def main():
 
         # Load recent window + memory summary from disk
         recent, memory_text = load_for_llm(HISTORY_PATH)
-        recent.append({"role": "user", "content": user_input})
+
+        # Compute gap hint vs. last activity (silence since last exchange)
+        last_activity = get_last_activity(HISTORY_PATH)
+        gap_hint = format_gap_hint(datetime.now() - last_activity) if last_activity else None
+        decorated = f"{gap_hint}\n{user_input}" if gap_hint else user_input
+
+        recent.append({"role": "user", "content": decorated})
         n_from_disk = len(recent) - 1
 
         ctx = AgentContext(send_reply=_print_reply, memory=memory_text)
         result = await run(agent, recent, ctx=ctx, hooks=hooks)
 
-        # Append only this turn's new messages to the archive
+        # Append only this turn's new messages to the archive, but restore the
+        # clean user content — gap hints are ephemeral per-run, not history.
         new_this_turn = result.messages[1 + n_from_disk:]
+        if gap_hint and new_this_turn and new_this_turn[0].get("role") == "user":
+            new_this_turn[0] = {**new_this_turn[0], "content": user_input}
         append_to_history(HISTORY_PATH, new_this_turn)
+        update_last_activity(HISTORY_PATH)
 
         if result.last_tool is None and result.final_output:
             print(f"Anna: {result.final_output}\n")
