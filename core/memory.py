@@ -18,7 +18,7 @@ HISTORY_DIR = Path(__file__).resolve().parent.parent / "history"
 
 TOKEN_THRESHOLD = int(os.getenv("MEMORY_TOKEN_THRESHOLD", "8000"))
 RECENT_K = int(os.getenv("MEMORY_RECENT_K", "40"))
-SUMMARY_MODEL = os.getenv("MEMORY_SUMMARY_MODEL", "gpt-4o-mini")
+SUMMARY_MODEL = os.getenv("MEMORY_SUMMARY_MODEL", "deepseek-reasoner")
 
 _SUMMARY_DIMS = ("anna", "user", "shared")
 

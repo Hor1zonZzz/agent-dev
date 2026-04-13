@@ -5,7 +5,8 @@
 ## 涉及代码
 
 - `core/tool.py:15-56` — `Tool` 基类（`to_openai()` / `execute()`）
-- `tools/__init__.py:1-5` — 统一导出
-- `tools/send_message.py:10-28` — 发送回复给用户
-- `tools/end_turn.py:10-23` — 结束当前 run（在 `agent.stop_at` 中注册）
-- `tools/edit_prompt.py:15-55` — 修改 prompts 下的 markdown 文件
+- `core/tools/__init__.py` — 统一导出
+- `core/tools/send_message.py:10-28` — 发送回复给用户
+- `core/tools/end_turn.py:10-23` — 结束当前 run（在 `agent.stop_at` 中注册）
+- `core/tools/edit_prompt.py:15-55` — 修改 prompts 下的 markdown 文件
+- `core/tools/recall_day.py` — 查往日日记（见 diary 功能文档）

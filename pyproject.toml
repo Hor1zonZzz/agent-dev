@@ -10,4 +10,8 @@ dependencies = [
     "pydantic>=2.0",
     "python-dotenv>=1.2.2",
     "wechat-clawbot>=0.3.0",
+    "hermes-agent",
 ]
+
+[tool.uv.sources]
+hermes-agent = { git = "https://github.com/NousResearch/hermes-agent.git" }

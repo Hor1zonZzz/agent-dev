@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from core.diary import read_today
+
 _DIR = Path(__file__).parent
 
 
@@ -41,7 +43,19 @@ def build(
     if memory:
         sections.append(f"## Long-term memory\n{memory}")
 
-    # 6. Current date — refreshed on each build
+    # 6. Today's diary — what Anna actually did today (written by Hermes).
+    # If empty, Anna must acknowledge she hasn't done anything yet today
+    # instead of fabricating. See the "Grounded activity" rule in guidelines.
+    diary = read_today()
+    if diary:
+        sections.append(f"## 我今天做了这些\n{diary}")
+    else:
+        sections.append(
+            "## 我今天做了这些\n"
+            "（今天还没有记录。如果用户问起今天做了什么，诚实说还没开始 / 还没做什么，不要编。）"
+        )
+
+    # 7. Current date — refreshed on each build
     today = datetime.now().strftime("%Y-%m-%d (%A)")
     sections.append(f"## Current date\nToday is {today}.")
 

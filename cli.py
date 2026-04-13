@@ -19,7 +19,7 @@ from core.memory import (
 )
 from core.time_hint import format_gap_hint
 from prompts import build
-from tools import end_turn, send_message
+from core.tools import end_turn, recall_day, send_message
 
 load_dotenv()
 
@@ -29,7 +29,7 @@ agent = Agent(
     name="anna",
     instructions=lambda ctx: build(memory=ctx.memory if ctx else None),
     model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-    tools=[send_message, end_turn],
+    tools=[send_message, recall_day, end_turn],
     stop_at={"end_turn"},
 )
 
