@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 _DIR = Path(__file__).parent
@@ -39,5 +40,9 @@ def build(
     # 5. Long-term Memory — placeholder for future
     if memory:
         sections.append(f"## Long-term memory\n{memory}")
+
+    # 6. Current date — refreshed on each build
+    today = datetime.now().strftime("%Y-%m-%d (%A)")
+    sections.append(f"## Current date\nToday is {today}.")
 
     return "\n\n".join(s for s in sections if s)
