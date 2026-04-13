@@ -10,7 +10,6 @@ Prerequisites
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import sys
 from pathlib import Path
@@ -31,6 +30,7 @@ from wechat_clawbot.monitor.monitor import MonitorOpts, monitor_weixin_provider
 
 from core.context import AgentContext
 from core.loop import Agent, run
+from core.memory import append_to_history, load_for_llm, maybe_compress
 from prompts import build
 from tools import end_turn, send_message
 
@@ -40,7 +40,7 @@ HISTORY_DIR = Path(__file__).parent / "history" / "wechat"
 
 agent = Agent(
     name="anna",
-    instructions=lambda _ctx: build(),
+    instructions=lambda ctx: build(memory=ctx.memory if ctx else None),
     model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
     tools=[send_message, end_turn],
     stop_at={"end_turn"},
@@ -74,56 +74,98 @@ def _history_path(user_id: str) -> Path:
     return HISTORY_DIR / f"{safe}.json"
 
 
-def load_history(user_id: str) -> list[dict]:
-    path = _history_path(user_id)
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return []
-
-
-def save_history(user_id: str, messages: list[dict]) -> None:
-    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    path = _history_path(user_id)
-    path.write_text(json.dumps(messages, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
 # ---------------------------------------------------------------------------
-# Message dispatch — called by monitor_weixin_provider for each inbound msg
+# Message dispatch — non-blocking router + single-worker consumer
+#
+# dispatch_reply is called by the monitor's for-loop (awaited), so it MUST
+# return quickly. It only routes the text into one of two queues:
+#
+#   - _active_ctx.inbox   → when a run is in progress (mid-run interrupt)
+#   - _inbox              → when idle (worker picks it up)
+#
+# The long-running worker coroutine owns the agent run, history I/O, and
+# memory compression. One worker = one-user-at-a-time serialization.
 # ---------------------------------------------------------------------------
 
 _hooks = WeChatHooks()
 
+_inbox: asyncio.Queue[tuple[str, str, str | None]] = asyncio.Queue()
+_active_ctx: AgentContext | None = None
+
 
 async def dispatch_reply(msg_ctx: WeixinMsgContext) -> None:
-    """Handle an inbound WeChat message: run the agent and reply."""
-    user_id = msg_ctx.from_user
-    text = msg_ctx.body
-    if not text or not text.strip():
+    """Route an inbound message. Returns immediately (no agent work here)."""
+    text = (msg_ctx.body or "").strip()
+    if not text:
         return
 
+    user_id = msg_ctx.from_user
     logger.info("[wechat] Message from {}: {}", user_id, text[:120])
 
-    # Load per-user conversation history
-    messages = load_history(user_id)
-    messages.append({"role": "user", "content": text})
+    if _active_ctx is not None:
+        _active_ctx.inbox.put_nowait(text)
+        logger.info("[wechat] → 注入运行中 inbox")
+    else:
+        _inbox.put_nowait((user_id, text, msg_ctx.context_token))
+        logger.info("[wechat] → 入队等待 worker")
 
-    # Build a send_reply callback that sends text back to the WeChat user
+
+def _build_reply_fn(user_id: str, context_token: str | None):
     api_opts = WeixinApiOptions(
         base_url=_account.base_url,
         token=_account.token,
-        context_token=msg_ctx.context_token,
+        context_token=context_token,
     )
 
     async def reply_fn(reply_text: str) -> None:
         await send_message_weixin(to=user_id, text=reply_text, opts=api_opts)
 
-    ctx = AgentContext(send_reply=reply_fn)
+    return reply_fn
 
-    # Run the agent loop
-    result = await run(agent, messages, ctx=ctx, hooks=_hooks)
 
-    # Persist history (strip system message added by run())
-    save_history(user_id, result.messages[1:])
+async def worker() -> None:
+    """Consume messages one turn at a time."""
+    global _active_ctx
+
+    while True:
+        user_id, first_text, ctx_token = await _inbox.get()
+
+        # Greedily batch any messages already queued (zero-delay merge).
+        batch_texts = [first_text]
+        while not _inbox.empty():
+            _, other_text, other_token = _inbox.get_nowait()
+            batch_texts.append(other_text)
+            ctx_token = other_token or ctx_token  # keep freshest token
+
+        history_path = _history_path(user_id)
+        recent, memory_text = load_for_llm(history_path)
+        for t in batch_texts:
+            recent.append({"role": "user", "content": t})
+        n_from_disk = len(recent) - len(batch_texts)
+
+        ctx = AgentContext(
+            send_reply=_build_reply_fn(user_id, ctx_token),
+            memory=memory_text,
+        )
+        _active_ctx = ctx
+        try:
+            result = await run(agent, recent, ctx=ctx, hooks=_hooks)
+            new_this_turn = result.messages[1 + n_from_disk:]
+            append_to_history(history_path, new_this_turn)
+        finally:
+            # IMPORTANT: history is written BEFORE clearing _active_ctx, so
+            # any message that slipped into ctx.inbox during append_to_history
+            # will find a fully-persisted history when the next run loads it.
+            _active_ctx = None
+
+        # Salvage mid-run stragglers (put into ctx.inbox between last turn's
+        # inbox-drain and _active_ctx = None) back onto the global queue.
+        while not ctx.inbox.empty():
+            leftover = ctx.inbox.get_nowait()
+            if leftover is not None:
+                _inbox.put_nowait((user_id, leftover, ctx_token))
+
+        await maybe_compress(history_path)
 
 
 # ---------------------------------------------------------------------------
@@ -158,11 +200,19 @@ async def main() -> None:
 
     logger.info("[wechat] 启动消息监听 (Ctrl+C 退出)...")
 
+    worker_task = asyncio.create_task(worker(), name="anna-worker")
+
     try:
         await monitor_weixin_provider(opts, stop_event=stop)
     except KeyboardInterrupt:
         stop.set()
         logger.info("[wechat] 已停止。")
+    finally:
+        worker_task.cancel()
+        try:
+            await worker_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 if __name__ == "__main__":
