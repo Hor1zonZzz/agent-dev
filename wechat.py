@@ -36,9 +36,14 @@ from core.memory import (
     get_last_activity,
     load_for_llm,
     maybe_compress,
+    update_dispatch_info,
     update_last_activity,
+    update_last_anna_message,
+    update_next_proactive_at,
 )
+from core.proactive import compute_next_proactive, proactive_loop
 from core.time_hint import format_gap_hint
+from hermes.scheduler import start as start_hermes_cron
 from prompts import build
 from core.tools import end_turn, recall_day, send_message
 
@@ -97,7 +102,10 @@ def _history_path(user_id: str) -> Path:
 
 _hooks = WeChatHooks()
 
-_inbox: asyncio.Queue[tuple[str, str, str | None]] = asyncio.Queue()
+# Inbox tuple: (user_id, text, context_token, is_proactive)
+# is_proactive=True items are synthetic system triggers — gap_hint is skipped
+# and the synthetic user message is stripped from persisted history.
+_inbox: asyncio.Queue[tuple[str, str, str | None, bool]] = asyncio.Queue()
 _active_ctx: AgentContext | None = None
 
 
@@ -110,12 +118,24 @@ async def dispatch_reply(msg_ctx: WeixinMsgContext) -> None:
     user_id = msg_ctx.from_user
     logger.info("[wechat] Message from {}: {}", user_id, text[:120])
 
+    # Persist dispatch info on every inbound so the proactive loop can
+    # send messages even after a long quiet period.
+    update_dispatch_info(_history_path(user_id), user_id, msg_ctx.context_token)
+
     if _active_ctx is not None:
         _active_ctx.inbox.put_nowait(text)
         logger.info("[wechat] → 注入运行中 inbox")
     else:
-        _inbox.put_nowait((user_id, text, msg_ctx.context_token))
+        _inbox.put_nowait((user_id, text, msg_ctx.context_token, False))
         logger.info("[wechat] → 入队等待 worker")
+
+
+async def enqueue_proactive(user_id: str, text: str, _is_proactive: bool = True) -> None:
+    """Called by the proactive loop to inject a synthetic trigger."""
+    # Reuse the most recent context_token from meta (saved on each user message).
+    from core.memory import get_dispatch_info
+    _, ctx_token = get_dispatch_info(_history_path(user_id))
+    _inbox.put_nowait((user_id, text, ctx_token, True))
 
 
 def _build_reply_fn(user_id: str, context_token: str | None):
@@ -154,23 +174,31 @@ async def worker() -> None:
 async def _run_one_iteration() -> None:
     global _active_ctx
 
-    user_id, first_text, ctx_token = await _inbox.get()
+    user_id, first_text, ctx_token, is_proactive = await _inbox.get()
 
     # Greedily batch any messages already queued (zero-delay merge).
+    # A proactive trigger is consumed alone — if real user messages are also
+    # queued for this user, the trigger is dropped (the user just spoke, no
+    # need to nudge them).
     batch_texts = [first_text]
-    while not _inbox.empty():
-        _, other_text, other_token = _inbox.get_nowait()
-        batch_texts.append(other_text)
-        ctx_token = other_token or ctx_token  # keep freshest token
+    if not is_proactive:
+        while not _inbox.empty():
+            other_uid, other_text, other_token, other_proactive = _inbox.get_nowait()
+            if other_proactive:
+                continue  # skip stale proactive triggers when real user is talking
+            batch_texts.append(other_text)
+            ctx_token = other_token or ctx_token  # keep freshest token
 
     history_path = _history_path(user_id)
     recent, memory_text = load_for_llm(history_path)
 
     # Gap hint: compare now to last_activity_at; prepend only to the first
-    # message of this batch. Mid-run inbox messages are not tagged —
-    # they're inherently rapid, so a hint would be noise.
-    last_activity = get_last_activity(history_path)
-    gap_hint = format_gap_hint(datetime.now() - last_activity) if last_activity else None
+    # message of this batch. Skipped for proactive triggers — the synthetic
+    # message already encodes time context and a hint would be redundant.
+    gap_hint: str | None = None
+    if not is_proactive:
+        last_activity = get_last_activity(history_path)
+        gap_hint = format_gap_hint(datetime.now() - last_activity) if last_activity else None
 
     for i, t in enumerate(batch_texts):
         content = f"{gap_hint}\n{t}" if (i == 0 and gap_hint) else t
@@ -185,11 +213,18 @@ async def _run_one_iteration() -> None:
     try:
         result = await run(agent, recent, ctx=ctx, hooks=_hooks)
         new_this_turn = result.messages[1 + n_from_disk:]
-        # Strip gap hint from persisted history — it's a per-run annotation.
-        if gap_hint and new_this_turn and new_this_turn[0].get("role") == "user":
+        if is_proactive and new_this_turn and new_this_turn[0].get("role") == "user":
+            # Synthetic trigger should not appear in history at all.
+            new_this_turn = new_this_turn[1:]
+        elif gap_hint and new_this_turn and new_this_turn[0].get("role") == "user":
+            # Strip gap hint from persisted history — it's a per-run annotation.
             new_this_turn[0] = {**new_this_turn[0], "content": batch_texts[0]}
         append_to_history(history_path, new_this_turn)
-        update_last_activity(history_path)
+        if not is_proactive:
+            update_last_activity(history_path)
+        now = datetime.now()
+        update_last_anna_message(history_path, now)
+        update_next_proactive_at(history_path, compute_next_proactive(now))
     finally:
         # IMPORTANT: history is written BEFORE clearing _active_ctx, so
         # any message that slipped into ctx.inbox during append_to_history
@@ -201,7 +236,7 @@ async def _run_one_iteration() -> None:
     while not ctx.inbox.empty():
         leftover = ctx.inbox.get_nowait()
         if leftover is not None:
-            _inbox.put_nowait((user_id, leftover, ctx_token))
+            _inbox.put_nowait((user_id, leftover, ctx_token, False))
 
     await maybe_compress(history_path)
 
@@ -239,6 +274,11 @@ async def main() -> None:
     logger.info("[wechat] 启动消息监听 (Ctrl+C 退出)...")
 
     worker_task = asyncio.create_task(worker(), name="anna-worker")
+    proactive_task = asyncio.create_task(
+        proactive_loop(HISTORY_DIR, enqueue_proactive),
+        name="anna-proactive",
+    )
+    cron_task = start_hermes_cron()
 
     try:
         await monitor_weixin_provider(opts, stop_event=stop)
@@ -246,11 +286,13 @@ async def main() -> None:
         stop.set()
         logger.info("[wechat] 已停止。")
     finally:
-        worker_task.cancel()
-        try:
-            await worker_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        for task in (worker_task, proactive_task, cron_task):
+            task.cancel()
+        for task in (worker_task, proactive_task, cron_task):
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 if __name__ == "__main__":
