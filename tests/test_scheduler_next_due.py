@@ -47,7 +47,9 @@ def test_no_plan_returns_default_schedule_plus_planner(no_plan):
     # 1 planner + 3 default slots
     assert kinds.count("planner") == 1
     assert kinds.count("hermes_slot") == 3
-    slots = sorted(e.payload for e in events if e.kind == "hermes_slot")
+    slots = sorted(
+        e.payload for e in events if e.kind == "hermes_slot" and isinstance(e.payload, str)
+    )
     assert slots == ["evening", "morning", "noon"]
 
 
@@ -61,7 +63,9 @@ def test_plan_replaces_default_schedule(monkeypatch, plan_dir):
     assert kinds.count("planner") == 1
     assert kinds.count("hermes_task") == 2
     assert kinds.count("hermes_slot") == 0
-    titles = sorted(e.payload[0] for e in events if e.kind == "hermes_task")
+    titles = sorted(
+        e.payload[0] for e in events if e.kind == "hermes_task" and isinstance(e.payload, tuple)
+    )
     assert titles == ["查天气", "读文章"]
 
 
@@ -99,6 +103,7 @@ def test_next_event_skips_past_plan_tasks(monkeypatch, plan_dir):
     # 15:00 — 08:30 and 14:00 are past, next plan task is 20:00.
     event = scheduler._next_event(datetime(2026, 4, 15, 15, 0))
     assert event.kind == "hermes_task"
+    assert isinstance(event.payload, tuple)
     assert event.payload[0] == "c"
     assert event.when == datetime(2026, 4, 15, 20, 0)
 

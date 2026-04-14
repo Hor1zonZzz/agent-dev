@@ -4,12 +4,12 @@
 
 ## 涉及代码
 
-- `hermes/plan.py:28` — `PlanTask` / `Plan` Pydantic 模型
-- `hermes/plan.py:57` — `plan_path(day)` 路径约定 `history/plans/YYYY-MM-DD.json`
-- `hermes/plan.py:69` — `validate_tasks()` 校验规则（时间范围、升序、间隔、字段长度）
-- `hermes/plan.py:112` — `write_plan()` 原子写
-- `hermes/plan.py:137` — `read_plan()` 读取 + 校验（失败返回 None）
-- `core/tools/save_plan.py` — `save_plan` 工具：Anna 用它落盘，校验失败会把错误返回给 LLM 让她修正
+- `hermes/plan.py:43` — `PlanTask` / `Plan` Pydantic 模型
+- `hermes/plan.py:63` — `plan_path(day)` 路径约定 `history/plans/YYYY-MM-DD.json`
+- `hermes/plan.py:75` — `validate_tasks()` 校验规则（时间范围、升序、间隔、字段长度）
+- `hermes/plan.py:118` — `write_plan()` 原子写
+- `hermes/plan.py:143` — `read_plan()` 读取 + 校验（失败返回 None）
+- `hermes/plan.py:209` — `save_plan` 工具（放在 hermes 下避免 core→hermes 反向依赖）
 - `hermes/planner.py:60` — `run_planner()` 构造 planner Agent 并运行
 - `hermes/planner.py:25` — `PLANNER_TRIGGER_TEMPLATE` 触发消息
 - `hermes/scheduler.py:26` — `PLANNER_TIME = 23:00`

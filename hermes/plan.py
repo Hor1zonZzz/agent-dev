@@ -1,7 +1,8 @@
 """Anna's daily plan file — what she decided the night before to do today.
 
-Written by ``hermes/planner.py`` (Anna calls the ``save_plan`` tool), read by
-``hermes/scheduler.py`` which dispatches each task at its scheduled time.
+Written by ``hermes/planner.py`` (Anna calls the ``save_plan`` tool defined
+at the bottom of this module), read by ``hermes/scheduler.py`` which
+dispatches each task at its scheduled time.
 
 File convention: ``history/plans/YYYY-MM-DD.json`` — one file per day, same
 style as ``history/diary/``. Atomic writes (tmp + ``os.replace``) so the
@@ -18,11 +19,13 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from loguru import logger
 from pydantic import BaseModel, Field
+
+from core.tool import Tool
 
 PLAN_DIR = Path(__file__).resolve().parent.parent / "history" / "plans"
 
@@ -159,3 +162,60 @@ def read_plan(day: date) -> Plan | None:
         return None
 
     return plan
+
+
+# ---------------------------------------------------------------------------
+# save_plan tool — exposed to the planner Agent so Anna can persist her plan.
+#
+# This lives here (not in ``core/tools/``) so ``core`` stays free of any
+# dependency on ``hermes``. All plan-related code — models, I/O, validation,
+# tool — is now in one module.
+# ---------------------------------------------------------------------------
+
+
+class _SavePlanParams(BaseModel):
+    tasks: list[PlanTask] = Field(
+        description=(
+            "The plan for tomorrow — a list of small activities, each with "
+            '"time" (HH:MM, 24h, between 06:30 and 22:30), "title" (short '
+            'headline, <= 30 chars), and "instruction" (what Hermes should '
+            "do, <= 500 chars). 1–6 tasks, strictly ascending times with "
+            "at least 30 minutes between adjacent entries."
+        ),
+    )
+
+
+def _save_plan(tasks: list[dict]) -> str:
+    # ``core/tool.py`` calls ``parsed.model_dump()``, which recursively turns
+    # nested Pydantic models into plain dicts before invoking the function.
+    # Re-hydrate them here so validate_tasks sees real PlanTask objects.
+    try:
+        plan_tasks = [PlanTask.model_validate(t) for t in tasks]
+    except Exception as e:
+        return f"保存失败，task 字段格式不对：{e}"
+
+    errors = validate_tasks(plan_tasks)
+    if errors:
+        return "保存失败，请修正后再调用 save_plan：\n- " + "\n- ".join(errors)
+
+    # Planner always writes for the next calendar day. Stays consistent with
+    # run_planner() which reads `now + 1 day`, regardless of what time the
+    # planner was triggered (scheduled 23:00 or a manual debug run).
+    day = (datetime.now() + timedelta(days=1)).date()
+    path = write_plan(day, plan_tasks)
+    return f"已保存 {len(plan_tasks)} 条任务到 {path.name}。"
+
+
+save_plan = Tool(
+    name="save_plan",
+    description=(
+        "Save your plan for tomorrow as a list of scheduled activities. "
+        "Each task has a time (HH:MM), a short title, and an instruction "
+        "telling Hermes what to do. Times must be between 06:30 and 22:30, "
+        "strictly ascending, with at least 30 minutes between adjacent "
+        "tasks. 1-6 tasks total. Call this once you've thought through "
+        "what you want to do tomorrow."
+    ),
+    params=_SavePlanParams,
+    fn=_save_plan,
+)

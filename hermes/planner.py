@@ -22,7 +22,8 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from core.loop import Agent, run
-from core.tools import end_turn, recall_day, save_plan
+from core.tools import end_turn, recall_day
+from hermes.plan import save_plan
 from prompts import build
 
 load_dotenv()

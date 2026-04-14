@@ -11,7 +11,9 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-DIARY_DIR = Path(__file__).resolve().parent.parent / "history" / "diary"
+# Single source of truth: defined in ``core/diary.py`` (Anna reads),
+# re-exported here for ``hermes/`` writers. Keeps the path in one place.
+from core.diary import DIARY_DIR
 
 
 def append_entry(title: str, content: str) -> Path:

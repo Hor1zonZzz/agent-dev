@@ -4,8 +4,7 @@ Agent 主循环在以下时刻回调：`on_agent_start` / `on_agent_end` / `on_t
 
 ## 涉及代码
 
-- `core/hooks.py:13-19` — `Hooks` Protocol 定义
-- `core/hooks.py:22-38` — `CompanionHooks` 默认实现（日志）
+- `core/hooks.py:13-19` — `Hooks` Protocol 定义（具体实现由各 host 各自提供）
 
 ## 在主循环中的触发点
 
