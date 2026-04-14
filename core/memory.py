@@ -131,11 +131,6 @@ NEW MESSAGES (json, continuation of the conversation):
 # ── Public helpers ────────────────────────────────────────────────────
 
 
-def estimate_tokens(messages: list[dict]) -> int:
-    """Rough token estimate: len(json_string) / 3."""
-    return len(json.dumps(messages, ensure_ascii=False)) // 3
-
-
 def count_meaningful(messages: list[dict]) -> int:
     """Count user messages + send_message tool calls. Other roles/tools are noise."""
     n = 0

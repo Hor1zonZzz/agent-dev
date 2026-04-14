@@ -23,7 +23,6 @@ from core.memory import (
     _parse_summary_response,
     append_to_history,
     count_meaningful,
-    estimate_tokens,
     load_for_llm,
     load_latest_summary,
     maybe_compress,
@@ -147,22 +146,6 @@ def summary_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 
 # ── Unit tests ────────────────────────────────────────────────────────
-
-
-class TestEstimateTokens:
-    def test_empty(self):
-        assert estimate_tokens([]) == 0
-
-    def test_basic(self):
-        msgs = [{"role": "user", "content": "hello world"}]
-        tokens = estimate_tokens(msgs)
-        # JSON string ~40 chars, /3 ≈ 13
-        assert 5 < tokens < 30
-
-    def test_chinese(self):
-        msgs = [{"role": "user", "content": "你好世界" * 100}]
-        tokens = estimate_tokens(msgs)
-        assert tokens > 100
 
 
 class TestParseSummaryResponse:

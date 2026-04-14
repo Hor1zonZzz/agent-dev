@@ -1,16 +1,15 @@
 # Memory 压缩
 
-history token 超过阈值时，后台异步调 LLM 生成结构化摘要（anna / user / shared 三维），写入 md 文件；下轮 `load_for_llm` 自动读取最新摘要注入 system prompt。
+每轮对话结束后,检查自上次压缩以来累计的"有意义消息"数(user 发言 + `send_message` 工具调用);达到 `MEMORY_COMPRESS_EVERY`(默认 100)就后台异步调 LLM,基于上次摘要增量更新 anna / user / shared 三维摘要,写入 md。成功后把指针 `last_compressed_at_index` 推到决策时刻的 history 末尾,下轮 `load_for_llm` 自动读取每维度最新的那份注入 system prompt。
 
 ## 涉及代码
 
-- `core/memory.py:19-21` — 阈值配置（`MEMORY_TOKEN_THRESHOLD` / `MEMORY_RECENT_K` / `MEMORY_SUMMARY_MODEL`）
-- `core/memory.py:31-77` — 提取 prompt 模板
-- `core/memory.py:79-82` — `estimate_tokens()`
-- `core/memory.py:84-113` — `load_latest_summary()` 组合最新摘要
-- `core/memory.py:147-165` — `maybe_compress()` 阈值检查 + 后台派发
-- `core/memory.py:168-190` — `_compress()` 后台 LLM 调用 + 落盘
-- `core/memory.py:196-232` — 摘要解析与分维度写盘
+- `core/memory.py` — `COMPRESS_EVERY` / `MEMORY_RECENT_K` / `MEMORY_SUMMARY_MODEL` 配置
+- `EXTRACTION_PROMPT`(首次全量) / `INCREMENTAL_PROMPT`(增量更新)
+- `count_meaningful()` — 过滤噪声,只计 user + send_message
+- `load_latest_summary()` — 每维度独立找最新 md
+- `maybe_compress()` — 用指针 + 阈值判定是否派发
+- `_compress(history_path, start_idx, end_idx)` — 后台 LLM + 空维度跳过 + 成功推进指针
 
 ## 产物目录
 
