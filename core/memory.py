@@ -16,11 +16,12 @@ from openai import AsyncOpenAI
 
 HISTORY_DIR = Path(__file__).resolve().parent.parent / "history"
 
-TOKEN_THRESHOLD = int(os.getenv("MEMORY_TOKEN_THRESHOLD", "8000"))
+COMPRESS_EVERY = int(os.getenv("MEMORY_COMPRESS_EVERY", "100"))
 RECENT_K = int(os.getenv("MEMORY_RECENT_K", "40"))
 SUMMARY_MODEL = os.getenv("MEMORY_SUMMARY_MODEL", "deepseek-reasoner")
 
 _SUMMARY_DIMS = ("anna", "user", "shared")
+_EMPTY_MARKER = "（暂无）"
 
 _USER_KEYS = ("user_facts", "user_state", "user_preferences")
 _ANNA_KEYS = ("anna_stance", "anna_commitments")
@@ -73,6 +74,60 @@ CONVERSATION HISTORY:
 {conversation_json}
 """
 
+INCREMENTAL_PROMPT = """\
+You are a memory extraction system for a companion chat agent named Anna.
+
+You have an EXISTING summary from a previous compression, and a batch of NEW \
+MESSAGES that continue after it. Produce an UPDATED summary reflecting the \
+current state. Write in the same language the conversation uses.
+
+Rules for merging:
+- PRESERVE from the existing summary any facts, preferences, or context that \
+are still true and not contradicted by new messages.
+- INTEGRATE new facts, state changes, commitments, and topics from the new messages.
+- UPDATE entries that are superseded (e.g. mood changed, location changed).
+- REMOVE items that are clearly resolved (e.g. an open thread that was answered).
+- Only write "（暂无）" for a section if BOTH the existing summary AND the new \
+messages have nothing relevant to it. If the existing summary had content and \
+new messages add nothing, carry the existing content forward unchanged.
+
+Output exactly the following 7 sections:
+
+## user_facts
+Factual information about the user: name, age, occupation, location, \
+people they mentioned, events in their life. Bullet points.
+
+## user_state
+The user's CURRENT state as of the most recent messages: mood, what \
+they're doing, energy level, what they seem to want from the conversation.
+
+## user_preferences
+User's expressed preferences, habits, likes/dislikes, and sensitive \
+topics (things they don't want to discuss). Bullet points.
+
+## anna_stance
+Anna's current attitude / tone toward the user. Warm, cautious, playful, concerned?
+
+## anna_commitments
+Promises or commitments Anna has made: things she said she'd remember, \
+follow up on, or do.
+
+## topic_thread
+Summary of conversation topics in chronological order. What was discussed, \
+key points, how topics transitioned.
+
+## open_threads
+Unresolved topics, pending questions, things that were mentioned but not concluded.
+
+---
+
+EXISTING SUMMARY:
+{prev_summary}
+
+NEW MESSAGES (json, continuation of the conversation):
+{conversation_json}
+"""
+
 # ── Public helpers ────────────────────────────────────────────────────
 
 
@@ -81,34 +136,43 @@ def estimate_tokens(messages: list[dict]) -> int:
     return len(json.dumps(messages, ensure_ascii=False)) // 3
 
 
-def load_latest_summary() -> str | None:
-    """Read the most recent set of summary md files and combine them.
+def count_meaningful(messages: list[dict]) -> int:
+    """Count user messages + send_message tool calls. Other roles/tools are noise."""
+    n = 0
+    for m in messages:
+        role = m.get("role")
+        if role == "user":
+            n += 1
+        elif role == "assistant":
+            for tc in m.get("tool_calls") or []:
+                if (tc.get("function") or {}).get("name") == "send_message":
+                    n += 1
+    return n
 
-    Returns a combined markdown string, or *None* if no summaries exist.
-    """
-    # Collect timestamps from the user/ dir (all three dirs share timestamps)
-    user_dir = HISTORY_DIR / "user"
-    if not user_dir.is_dir():
+
+def _latest_dim_content(dim: str) -> str | None:
+    """Return the content of the most recent md file in ``history/{dim}/``."""
+    dir_path = HISTORY_DIR / dim
+    if not dir_path.is_dir():
         return None
-
-    md_files = sorted(user_dir.glob("*.md"))
+    md_files = sorted(dir_path.glob("*.md"))
     if not md_files:
         return None
+    content = md_files[-1].read_text(encoding="utf-8").strip()
+    return content or None
 
-    latest_ts = md_files[-1].stem  # e.g. "20260410_143000"
 
+def load_latest_summary() -> str | None:
+    """Combine each dimension's most recent md (independent per dim) into one markdown."""
     parts: list[str] = []
     for dim, label in (
         ("user", "About the user"),
         ("anna", "About Anna"),
         ("shared", "Conversation context"),
     ):
-        path = HISTORY_DIR / dim / f"{latest_ts}.md"
-        if path.exists():
-            content = path.read_text(encoding="utf-8").strip()
-            if content:
-                parts.append(f"### {label}\n{content}")
-
+        content = _latest_dim_content(dim)
+        if content and content != _EMPTY_MARKER:
+            parts.append(f"### {label}\n{content}")
     return "\n\n".join(parts) if parts else None
 
 
@@ -244,28 +308,48 @@ _compress_task: asyncio.Task | None = None
 
 
 async def maybe_compress(history_path: Path) -> None:
-    """Spawn a background compression task if the history exceeds the token threshold."""
+    """Spawn a background compression task once the slice since the last compression
+    accumulates COMPRESS_EVERY meaningful messages (user turns + send_message calls)."""
     global _compress_task
 
     if _compress_task is not None and not _compress_task.done():
-        return  # already running
+        return
 
     if not history_path.exists():
         return
 
     messages = json.loads(history_path.read_text(encoding="utf-8"))
-    if estimate_tokens(messages) <= TOKEN_THRESHOLD:
+    start_idx = int(load_meta(history_path).get("last_compressed_at_index", 0))
+    new_slice = messages[start_idx:]
+    if count_meaningful(new_slice) < COMPRESS_EVERY:
         return
 
-    logger.info("Token threshold exceeded, spawning background compression")
-    _compress_task = asyncio.create_task(_compress(history_path))
+    end_idx = len(messages)
+    logger.info(
+        "Spawning memory compression: messages[{}:{}] ({} meaningful)",
+        start_idx, end_idx, count_meaningful(new_slice),
+    )
+    _compress_task = asyncio.create_task(_compress(history_path, start_idx, end_idx))
 
 
-async def _compress(history_path: Path) -> None:
-    """Background task: read history → call LLM → write summary md files."""
+async def _compress(history_path: Path, start_idx: int = 0, end_idx: int | None = None) -> None:
+    """Background task: slice history → call LLM (incremental if prior summary exists)
+    → write only non-empty dimension md files → advance the meta pointer on success."""
     try:
-        raw = history_path.read_text(encoding="utf-8")
-        prompt = EXTRACTION_PROMPT.format(conversation_json=raw)
+        messages = json.loads(history_path.read_text(encoding="utf-8"))
+        if end_idx is None:
+            end_idx = len(messages)
+        slice_messages = messages[start_idx:end_idx]
+        slice_json = json.dumps(slice_messages, ensure_ascii=False, indent=2)
+
+        prev_summary = load_latest_summary()
+        if prev_summary:
+            prompt = INCREMENTAL_PROMPT.format(
+                prev_summary=prev_summary,
+                conversation_json=slice_json,
+            )
+        else:
+            prompt = EXTRACTION_PROMPT.format(conversation_json=slice_json)
 
         client = AsyncOpenAI()
         response = await client.chat.completions.create(
@@ -278,10 +362,20 @@ async def _compress(history_path: Path) -> None:
         sections = _parse_summary_response(content)
 
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        written: list[str] = []
         for dim in _SUMMARY_DIMS:
-            _write_summary(dim, ts, sections[dim])
+            if sections[dim] and sections[dim] != _EMPTY_MARKER:
+                _write_summary(dim, ts, sections[dim])
+                written.append(dim)
 
-        logger.info("Memory compression complete: {}", ts)
+        meta = load_meta(history_path)
+        meta["last_compressed_at_index"] = end_idx
+        save_meta(history_path, meta)
+
+        logger.info(
+            "Memory compression complete: ts={}, wrote={}, pointer→{}",
+            ts, written or "(all empty)", end_idx,
+        )
     except Exception:
         logger.exception("Background memory compression failed")
 

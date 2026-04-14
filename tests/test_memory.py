@@ -15,13 +15,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from core.memory import (
+    COMPRESS_EVERY,
     HISTORY_DIR,
     RECENT_K,
     SUMMARY_MODEL,
-    TOKEN_THRESHOLD,
     _compress,
     _parse_summary_response,
     append_to_history,
+    count_meaningful,
     estimate_tokens,
     load_for_llm,
     load_latest_summary,
