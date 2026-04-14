@@ -71,8 +71,8 @@ def test_dispatch_when_idle_enqueues_to_inbox():
     async def body():
         await wechat.dispatch_reply(_mk_msg("hi"))
         assert wechat._inbox.qsize() == 1
-        uid, text, tok = wechat._inbox.get_nowait()
-        assert (uid, text, tok) == ("u1", "hi", "tok")
+        uid, text, tok, is_proactive = wechat._inbox.get_nowait()
+        assert (uid, text, tok, is_proactive) == ("u1", "hi", "tok", False)
 
     asyncio.run(body())
 
