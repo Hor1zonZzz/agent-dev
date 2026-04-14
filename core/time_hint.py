@@ -26,17 +26,17 @@ def format_gap_hint(delta: timedelta) -> str | None:
     days = hours / 24
 
     if mins < 30:
-        return "[几分钟前刚聊过]"
+        return "[刚聊过没多久]"
     if hours < 1:
-        return f"[{int(mins)} 分钟前]"
+        return f"[距上次说话 {int(mins)} 分钟]"
     if hours < 12:
-        return f"[{int(hours)} 小时前]"
+        return f"[距上次说话 {int(hours)} 小时]"
     if hours < 24:
-        return "[今天早些时候]"
+        return "[距上次说话已过半天]"
     if days < 2:
-        return "[昨天]"
+        return "[距上次说话约一天]"
     if days < 3:
-        return "[前天]"
+        return "[距上次说话约两天]"
     if days < 14:
         return f"[{int(days)} 天没说话了]"
 
