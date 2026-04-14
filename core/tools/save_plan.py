@@ -30,23 +30,25 @@ class SavePlanParams(BaseModel):
     )
 
 
-def _target_day(now: datetime) -> datetime:
-    """Plans written at/after 23:00 are for tomorrow; earlier is for today
-    (useful for manual testing or same-day re-planning).
-    """
-    if now.hour >= 23:
-        return now + timedelta(days=1)
-    return now
+def _save_plan(tasks: list[dict]) -> str:
+    # ``core/tool.py`` calls ``parsed.model_dump()``, which recursively turns
+    # nested Pydantic models into plain dicts before invoking the function.
+    # Re-hydrate them here so validate_tasks sees real PlanTask objects.
+    try:
+        plan_tasks = [PlanTask.model_validate(t) for t in tasks]
+    except Exception as e:
+        return f"保存失败，task 字段格式不对：{e}"
 
-
-def _save_plan(tasks: list[PlanTask]) -> str:
-    errors = validate_tasks(tasks)
+    errors = validate_tasks(plan_tasks)
     if errors:
         return "保存失败，请修正后再调用 save_plan：\n- " + "\n- ".join(errors)
 
-    day = _target_day(datetime.now()).date()
-    path = write_plan(day, tasks)
-    return f"已保存 {len(tasks)} 条任务到 {path.name}。"
+    # Planner always writes for the next calendar day. Stays consistent with
+    # run_planner() which reads `now + 1 day`, regardless of what time the
+    # planner was triggered (scheduled 23:00 or a manual debug run).
+    day = (datetime.now() + timedelta(days=1)).date()
+    path = write_plan(day, plan_tasks)
+    return f"已保存 {len(plan_tasks)} 条任务到 {path.name}。"
 
 
 save_plan = Tool(
