@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from loguru import logger
@@ -17,6 +17,8 @@ from openai import AsyncOpenAI
 HISTORY_DIR = Path(__file__).resolve().parent.parent / "history"
 
 COMPRESS_EVERY = int(os.getenv("MEMORY_COMPRESS_EVERY", "100"))
+IDLE_COMPRESS_MINUTES = int(os.getenv("MEMORY_IDLE_COMPRESS_MINUTES", "60"))
+WATCHDOG_INTERVAL_SECONDS = int(os.getenv("MEMORY_WATCHDOG_INTERVAL_SECONDS", "300"))
 RECENT_K = int(os.getenv("MEMORY_RECENT_K", "40"))
 SUMMARY_MODEL = os.getenv("MEMORY_SUMMARY_MODEL", "deepseek-reasoner")
 
@@ -302,9 +304,28 @@ def append_to_history(history_path: Path, new_messages: list[dict]) -> None:
 _compress_task: asyncio.Task | None = None
 
 
+def _latest_activity(meta: dict) -> datetime | None:
+    """Latest timestamp from either side — user msg or Anna's reply."""
+    stamps: list[datetime] = []
+    for key in ("last_activity_at", "last_anna_message_at"):
+        s = meta.get(key)
+        if not s:
+            continue
+        try:
+            stamps.append(datetime.fromisoformat(s))
+        except ValueError:
+            continue
+    return max(stamps) if stamps else None
+
+
 async def maybe_compress(history_path: Path) -> None:
-    """Spawn a background compression task once the slice since the last compression
-    accumulates COMPRESS_EVERY meaningful messages (user turns + send_message calls)."""
+    """Spawn a background compression task when either:
+    - buffer_full: COMPRESS_EVERY meaningful messages accumulated since last compression, or
+    - idle: both sides have been silent for >= IDLE_COMPRESS_MINUTES and there is new content.
+
+    On success `_compress` advances `last_compressed_at_index`, so the next run starts
+    counting from scratch regardless of which trigger fired.
+    """
     global _compress_task
 
     if _compress_task is not None and not _compress_task.done():
@@ -314,17 +335,54 @@ async def maybe_compress(history_path: Path) -> None:
         return
 
     messages = json.loads(history_path.read_text(encoding="utf-8"))
-    start_idx = int(load_meta(history_path).get("last_compressed_at_index", 0))
+    meta = load_meta(history_path)
+    start_idx = int(meta.get("last_compressed_at_index", 0))
     new_slice = messages[start_idx:]
-    if count_meaningful(new_slice) < COMPRESS_EVERY:
+    meaningful = count_meaningful(new_slice)
+
+    if meaningful == 0:
+        return
+
+    buffer_full = meaningful >= COMPRESS_EVERY
+
+    idle = False
+    last = _latest_activity(meta)
+    if last is not None:
+        if datetime.now() - last >= timedelta(minutes=IDLE_COMPRESS_MINUTES):
+            idle = True
+
+    if not (buffer_full or idle):
         return
 
     end_idx = len(messages)
+    reason = "buffer_full" if buffer_full else "idle"
     logger.info(
-        "Spawning memory compression: messages[{}:{}] ({} meaningful)",
-        start_idx, end_idx, count_meaningful(new_slice),
+        "Spawning memory compression: reason={}, messages[{}:{}] ({} meaningful)",
+        reason, start_idx, end_idx, meaningful,
     )
     _compress_task = asyncio.create_task(_compress(history_path, start_idx, end_idx))
+
+
+async def compression_watchdog(history_dir: Path) -> None:
+    """Forever-loop: periodically check every history file in ``history_dir`` for
+    the idle-compression trigger. Complements the inline post-turn check in worker
+    — necessary because idle time elapses without any event to hook into."""
+    logger.info(
+        "[compress-watchdog] loop started (interval={}s, idle_threshold={}min)",
+        WATCHDOG_INTERVAL_SECONDS, IDLE_COMPRESS_MINUTES,
+    )
+    while True:
+        try:
+            if history_dir.is_dir():
+                for history_path in history_dir.glob("*.json"):
+                    if history_path.name.endswith(".meta.json"):
+                        continue
+                    await maybe_compress(history_path)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("[compress-watchdog] scan failed; continuing")
+        await asyncio.sleep(WATCHDOG_INTERVAL_SECONDS)
 
 
 async def _compress(history_path: Path, start_idx: int = 0, end_idx: int | None = None) -> None:

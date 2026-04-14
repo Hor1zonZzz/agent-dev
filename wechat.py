@@ -33,6 +33,7 @@ from core.context import AgentContext
 from core.loop import Agent, run
 from core.memory import (
     append_to_history,
+    compression_watchdog,
     get_last_activity,
     load_for_llm,
     maybe_compress,
@@ -279,6 +280,10 @@ async def main() -> None:
         name="anna-proactive",
     )
     cron_task = start_hermes_cron()
+    compress_task = asyncio.create_task(
+        compression_watchdog(HISTORY_DIR),
+        name="anna-compress-watchdog",
+    )
 
     try:
         await monitor_weixin_provider(opts, stop_event=stop)
@@ -286,9 +291,9 @@ async def main() -> None:
         stop.set()
         logger.info("[wechat] 已停止。")
     finally:
-        for task in (worker_task, proactive_task, cron_task):
+        for task in (worker_task, proactive_task, cron_task, compress_task):
             task.cancel()
-        for task in (worker_task, proactive_task, cron_task):
+        for task in (worker_task, proactive_task, cron_task, compress_task):
             try:
                 await task
             except (asyncio.CancelledError, Exception):
