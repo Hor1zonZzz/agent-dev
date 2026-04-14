@@ -16,4 +16,5 @@
 | 时间感知 | [time-awareness.md](time-awareness.md) |
 | 日记 | [diary.md](diary.md) |
 | Hermes（Anna 的手） | [hermes.md](hermes.md) |
+| Planner（Anna 自主规划明天） | [planner.md](planner.md) |
 | 测试 | [tests.md](tests.md) |

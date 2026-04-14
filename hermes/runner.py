@@ -48,21 +48,70 @@ def _extract_diary(response: str) -> str:
     return paragraphs[-1] if paragraphs else response.strip()
 
 
+def _resolve_hermes_config() -> tuple[str, str | None, str | None]:
+    """Return (model, base_url, api_key) for Hermes AIAgent instantiation."""
+    model = os.getenv("HERMES_MODEL") or os.getenv("OPENAI_MODEL") or "deepseek-chat"
+    base_url = os.getenv("HERMES_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+    api_key = os.getenv("HERMES_API_KEY") or os.getenv("OPENAI_API_KEY")
+    return model, base_url, api_key
+
+
+def run_single_task(
+    title: str,
+    instruction: str,
+    *,
+    model: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> bool:
+    """Run one Hermes task and append its diary entry. Returns True on success.
+
+    On any failure the fallback "（这件事今天没能做成，晚点再试。）" line is
+    appended so the day's diary doesn't silently miss an entry.
+    """
+    if model is None:
+        model, default_base, default_key = _resolve_hermes_config()
+        base_url = base_url or default_base
+        api_key = api_key or default_key
+
+    try:
+        # Fresh instance per task — Hermes docs say don't share across tasks.
+        agent = AIAgent(
+            model=model,
+            base_url=base_url,
+            api_key=api_key,
+            api_mode="chat_completions",  # force OpenAI-style, not codex
+            quiet_mode=True,
+            enabled_toolsets=["browser"],  # "web" toolset needs paid API keys; browser is self-contained
+            ephemeral_system_prompt=ANNA_VOICE_PROMPT,
+            skip_memory=False,  # share ~/.hermes/ with user's regular Hermes
+            max_iterations=30,
+        )
+        response = agent.chat(instruction)
+        # Hermes chat() returns None or empty string on failures that it
+        # swallowed internally. Treat those as failures rather than crashing.
+        if not response or not response.strip():
+            raise RuntimeError("agent.chat returned empty response")
+        entry = _extract_diary(response)
+        if not entry:
+            raise RuntimeError("no diary content after extraction")
+        append_entry(title, entry)
+        has_tag = "<diary>" in response
+        logger.info("[hermes] ✓ {} ({})", title, "tagged" if has_tag else "fallback")
+        return True
+    except Exception:
+        logger.exception("[hermes] ✗ {} failed", title)
+        append_entry(title, "（这件事今天没能做成，晚点再试。）")
+        return False
+
+
 def run_slot(slot: str) -> int:
     tasks = TASKS.get(slot)
     if tasks is None:
         logger.error("Unknown slot '{}'. Expected one of {}", slot, list(TASKS))
         return 2
 
-    # Model: HERMES_MODEL (Hermes-specific) > OPENAI_MODEL (Anna's) > fallback.
-    model = os.getenv("HERMES_MODEL") or os.getenv("OPENAI_MODEL") or "deepseek-chat"
-
-    # Endpoint override: pass base_url + api_key explicitly so Hermes bypasses
-    # ~/.hermes/config.yaml (which may be configured for a different provider,
-    # like the user's ChatGPT Plus codex setup). Per Hermes docs: "When base_url
-    # is set, Hermes ignores the provider and calls that endpoint directly."
-    base_url = os.getenv("HERMES_BASE_URL") or os.getenv("OPENAI_BASE_URL")
-    api_key = os.getenv("HERMES_API_KEY") or os.getenv("OPENAI_API_KEY")
+    model, base_url, api_key = _resolve_hermes_config()
 
     logger.info(
         "[hermes] {} slot: {} task(s), model={}, base_url={}",
@@ -71,33 +120,8 @@ def run_slot(slot: str) -> int:
 
     failed = 0
     for title, instruction in tasks:
-        try:
-            # Fresh instance per task — Hermes docs say don't share across tasks.
-            agent = AIAgent(
-                model=model,
-                base_url=base_url,
-                api_key=api_key,
-                api_mode="chat_completions",  # force OpenAI-style, not codex
-                quiet_mode=True,
-                enabled_toolsets=["browser"],  # "web" toolset needs paid API keys; browser is self-contained
-                ephemeral_system_prompt=ANNA_VOICE_PROMPT,
-                skip_memory=False,  # share ~/.hermes/ with user's regular Hermes
-                max_iterations=30,
-            )
-            response = agent.chat(instruction)
-            # Hermes chat() returns None or empty string on failures that it
-            # swallowed internally. Treat those as failures rather than crashing.
-            if not response or not response.strip():
-                raise RuntimeError("agent.chat returned empty response")
-            entry = _extract_diary(response)
-            if not entry:
-                raise RuntimeError("no diary content after extraction")
-            append_entry(title, entry)
-            has_tag = "<diary>" in response
-            logger.info("[hermes] ✓ {} ({})", title, "tagged" if has_tag else "fallback")
-        except Exception:
-            logger.exception("[hermes] ✗ {} failed", title)
-            append_entry(title, "（这件事今天没能做成，晚点再试。）")
+        ok = run_single_task(title, instruction, model=model, base_url=base_url, api_key=api_key)
+        if not ok:
             failed += 1
 
     return 1 if failed == len(tasks) else 0
