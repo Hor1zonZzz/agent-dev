@@ -1,17 +1,13 @@
 # 微信 ClawBot 入口
 
-通过 `wechat-clawbot` SDK 对接微信 iLink，长轮询拉消息、发回复。
+通过 `wechat-clawbot` SDK 对接微信 iLink，长轮询拉消息、发回复。会话编排委托给 `ChatSessionRunner`，入口层只保留 dispatch / batching / proactive / worker 生命周期。
 
 ## 涉及代码
 
-- `wechat.py:50` — `load_dotenv()`
-- `wechat.py:52` — history 目录（`history/wechat/`）
-- `wechat.py:54-60` — Agent 装配（`send_message + recall_day + end_turn`，`stop_at={"end_turn"}`）
-- `wechat.py:67-78` — `WeChatHooks`（见 [hooks.md](hooks.md)）
-- `wechat.py:85-87` — `_history_path(user_id)` 每用户独立 JSON
-- `wechat.py:141-151` — `_build_reply_fn()` 绑定回复回调
-- `wechat.py:251-296` — `main()` 启动 monitor + worker + proactive + hermes-cron
-- `wechat.py:298-302` — 登录 / 监听模式切换
+- `wechat.py` — transport / queue / worker / proactive 接线
+- `core/session.py` — `ChatSessionRunner`
+- `core/trace.py` — `dispatch.enqueued` / `dispatch.injected` / `dispatch.batched` / `dispatch.salvaged`
+- `core/meta.py` — dispatch sidecar 信息
 
 ## 启动
 
@@ -23,3 +19,7 @@ uv run python wechat.py          # 启动监听
 ## 并发模型
 
 见 [concurrent-dispatch.md](concurrent-dispatch.md)。
+
+## 相关功能
+
+- Trace 可观测性：[trace-observability.md](trace-observability.md)

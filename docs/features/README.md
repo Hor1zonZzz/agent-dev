@@ -7,9 +7,10 @@
 | Agent 主循环 | [agent-loop.md](agent-loop.md) |
 | 工具系统 | [tools.md](tools.md) |
 | Prompt 组装 | [prompt-build.md](prompt-build.md) |
+| Trace 可观测性 | [trace-observability.md](trace-observability.md) |
 | 对话历史持久化 | [history-persistence.md](history-persistence.md) |
 | Memory 压缩 | [memory-compression.md](memory-compression.md) |
-| 生命周期 Hooks | [hooks.md](hooks.md) |
+| 生命周期 Hooks（已废弃） | [hooks.md](hooks.md) |
 | CLI 入口 | [cli-entry.md](cli-entry.md) |
 | 微信 ClawBot 入口 | [wechat-entry.md](wechat-entry.md) |
 | 并发消息处理（Inbox 中断） | [concurrent-dispatch.md](concurrent-dispatch.md) |

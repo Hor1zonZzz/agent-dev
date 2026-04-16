@@ -1,12 +1,13 @@
 # 对话历史持久化
 
-每轮 run 完成后把新增 messages append 到 JSON 文件；启动新 run 时读取最近 K 条。全量 history 永不截断。
+每轮 chat run 完成后把新增 messages append 到 JSON 文件；启动新 run 时读取最近 K 条。全量 history 永不截断。history JSON、sidecar meta、memory summary 现在分别由不同模块负责。
 
 ## 涉及代码
 
-- `core/memory.py:115-130` — `load_for_llm()` 读最近窗口 + memory 摘要
-- `core/memory.py:133-142` — `append_to_history()` 追加写盘
-- `core/memory.py:20` — `RECENT_K` 窗口大小（默认 40）
+- `core/history.py` — `load_recent_messages()` / `append_to_history()`
+- `core/meta.py` — `last_activity_at` / `last_anna_message_at` / `next_proactive_at` / `dispatch_info`
+- `core/memory.py` — `load_latest_summary()` / `load_for_llm()` 兼容入口
+- `core/session.py` — 统一编排 load / append / meta 更新 / compression 触发
 
 ## 存储位置
 
@@ -15,5 +16,4 @@
 
 ## 调用位置
 
-- `cli.py:64, 73` — CLI 每轮 load / append
-- `wechat.py:141-143, 154` — worker 每轮 load / append
+- `core/session.py` — CLI / WeChat 共用同一套会话编排
