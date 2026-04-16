@@ -19,7 +19,7 @@ HISTORY_DIR = Path(__file__).resolve().parent.parent / "history"
 COMPRESS_EVERY = int(os.getenv("MEMORY_COMPRESS_EVERY", "100"))
 IDLE_COMPRESS_MINUTES = int(os.getenv("MEMORY_IDLE_COMPRESS_MINUTES", "60"))
 WATCHDOG_INTERVAL_SECONDS = int(os.getenv("MEMORY_WATCHDOG_INTERVAL_SECONDS", "300"))
-RECENT_K = int(os.getenv("MEMORY_RECENT_K", "40"))
+RECENT_K = int(os.getenv("MEMORY_RECENT_K", "140"))
 SUMMARY_MODEL = os.getenv("MEMORY_SUMMARY_MODEL", "deepseek-reasoner")
 
 _SUMMARY_DIMS = ("anna", "user", "shared")
