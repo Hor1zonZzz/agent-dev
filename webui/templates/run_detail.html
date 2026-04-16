@@ -1,100 +1,214 @@
 {% extends "base.html" %}
 
+{% macro lane_chip(lane, count) %}
+<span class="lane-tag lane-{{ lane }}">{{ lane }} <span class="lane-tag-count">{{ count }}</span></span>
+{% endmacro %}
+
 {% block content %}
-<section class="panel">
-  <div class="panel-title">
-    <h1>Run Summary</h1>
-    <a class="link-back" href="/traces">返回列表</a>
+
+<nav class="run-subnav">
+  <a class="link-back" href="/traces">
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+    返回列表
+  </a>
+  <div class="subnav-anchors">
+    <a href="#summary">Summary</a>
+    {% if payload.errors %}<a href="#errors" class="err-link">Errors · {{ payload.errors|length }}</a>{% endif %}
+    <a href="#timeline">Timeline · {{ payload.timeline|length }}</a>
+    <a href="#artifacts">Artifacts · {{ payload.artifacts|length }}</a>
   </div>
-  <div class="summary-grid">
-    <div><span class="label">Run ID</span><code>{{ payload.run.run_id }}</code></div>
-    <div><span class="label">Kind</span><span>{{ payload.run.run_kind }}</span></div>
-    <div><span class="label">Source</span><span>{{ payload.run.source }}</span></div>
-    <div><span class="label">Session</span><span>{{ payload.run.session_id or "-" }}</span></div>
-    <div><span class="label">Started</span><span>{{ payload.run.started_at_label }}</span></div>
-    <div><span class="label">Finished</span><span>{{ payload.run.finished_at_label }}</span></div>
-    <div><span class="label">Duration</span><span>{{ payload.run.duration_label }}</span></div>
-    <div><span class="label">Status</span><span class="status status-{{ payload.run.status }}">{{ payload.run.status }}</span></div>
-    <div><span class="label">Events</span><span>{{ payload.run.event_count }}</span></div>
-    <div><span class="label">Tools</span><span>{{ payload.summary.tool_count }}</span></div>
-    <div><span class="label">Artifacts</span><span>{{ payload.summary.artifact_count }}</span></div>
+</nav>
+
+<section class="hero-panel" id="summary">
+  <div class="hero-head">
+    <div class="hero-label">
+      <span class="status status-{{ payload.run.status }} hero-status" data-role="status">
+        {% if payload.run.is_running %}<span class="pulse-dot"></span>{% endif %}
+        {{ payload.run.status }}{% if payload.run.is_running %} · running{% endif %}
+      </span>
+      <span class="eyebrow">Run Summary</span>
+    </div>
+    <code class="run-id" data-role="run-id">{{ payload.run.run_id }}</code>
+  </div>
+
+  <article class="narrative">
+    {% set n = payload.narrative %}
+    {% if payload.run.status == 'error' and n.error_message %}
+      <p class="narrative-lede">
+        <span class="dropcap">✕</span>
+        这个 run
+        {% if n.error_turn is not none %}在<strong>第 {{ n.error_turn }} 轮 turn</strong>{% elif payload.run.duration_ms > 0 %}经过 <strong>{{ payload.run.duration_label }}</strong> 后{% endif %}
+        失败 ——
+        {% if n.error_type %}<code class="err-code">{{ n.error_type }}</code>: {% endif %}<em>{{ n.error_message }}</em>。
+        {% if payload.run.turn_count or n.tool_calls_total %}
+          此前
+          {% if payload.run.turn_count %}跑过 <strong>{{ payload.run.turn_count }} 轮 turn</strong>{% endif %}
+          {% if payload.run.turn_count and n.tool_calls_total %}、{% endif %}
+          {% if n.tool_calls_total %}调用了 <strong>{{ n.tool_calls_total }} 次 tool</strong>{% endif %}。
+        {% endif %}
+      </p>
+    {% elif payload.run.is_running %}
+      <p class="narrative-lede">
+        <span class="dropcap">⋯</span>
+        这个 run 还在进行。已产生 <strong>{{ payload.run.event_count }} 个事件</strong>、<strong>{{ payload.run.turn_count }} 轮 turn</strong>{% if n.tool_calls_total %}、调用了 <strong>{{ n.tool_calls_total }} 次 tool</strong>{% endif %}。耗时至今 <strong>{{ payload.run.duration_label }}</strong>。
+      </p>
+    {% elif n.dispatch_only %}
+      <p class="narrative-lede">
+        <span class="dropcap">✉</span>
+        这个 run 只登记了 <strong>dispatch</strong> 事件 —— 消息已经入队，但还没有一个完整的 agent 执行过程。{% if payload.run.event_count > 1 %}共 <strong>{{ payload.run.event_count }} 条 dispatch 记录</strong>。{% endif %}
+      </p>
+    {% else %}
+      <p class="narrative-lede">
+        <span class="dropcap">{{ (payload.run.run_kind or 'R')[0] | upper }}</span>
+        这个 run 耗时 <strong>{{ payload.run.duration_label }}</strong>
+        {% if payload.run.turn_count %}，完成了 <strong>{{ payload.run.turn_count }} 轮 turn</strong>{% endif %}
+        {% if n.tool_calls_total %}，调用了 <strong>{{ n.tool_calls_total }} 次 tool</strong>{% if n.top_tool %}（{% if n.top_tool_dominant %}主要是{% else %}包括{% endif %} <code>{{ n.top_tool }}</code>{% endif %}）{% endif %}
+        {% if payload.run.artifact_count %}，产出了 <strong>{{ payload.run.artifact_count }} 个 artifact</strong>{% endif %}。
+        {% if n.final_output_preview %}最终输出 <span class="narrative-quote">&ldquo;{{ n.final_output_preview }}&rdquo;</span>。{% endif %}
+      </p>
+    {% endif %}
+  </article>
+
+  <dl class="hero-meta">
+    <div><dt>Kind</dt><dd>{{ payload.run.run_kind }}</dd></div>
+    <div><dt>Source</dt><dd>{{ payload.run.source }}</dd></div>
+    <div><dt>Session</dt><dd>{{ payload.run.session_id or "—" }}</dd></div>
+    <div><dt>Started</dt><dd>{{ payload.run.started_at_label }}</dd></div>
+    <div><dt>Finished</dt><dd data-role="finished-label">{{ payload.run.finished_at_label }}</dd></div>
+    <div><dt>Duration</dt><dd data-role="duration-label">{{ payload.run.duration_label }}</dd></div>
+    <div><dt>Events</dt><dd data-role="event-count">{{ payload.run.event_count }}</dd></div>
+    <div><dt>Turns</dt><dd>{{ payload.run.turn_count }}</dd></div>
+  </dl>
+
+  <div class="lane-bar" title="lane distribution">
+    {% for seg in payload.summary.lane_distribution %}
+      <span class="lane-bar-seg lane-bg-{{ seg.lane }}" style="width: {{ seg.pct }}%" title="{{ seg.lane }} · {{ seg.count }} ({{ seg.pct }}%)"></span>
+    {% endfor %}
   </div>
   <div class="lane-row">
     {% for lane, count in payload.summary.lane_counts.items() %}
-      <span class="lane-tag lane-{{ lane }}">{{ lane }} {{ count }}</span>
+      {{ lane_chip(lane, count) }}
     {% endfor %}
   </div>
 </section>
 
 {% if payload.errors %}
-  <section class="panel error-panel">
+  <section class="panel error-panel" id="errors">
     <div class="panel-title">
-      <h2>Errors</h2>
-      <p class="subtle">{{ payload.errors|length }} error event(s)</p>
+      <div>
+        <h2 class="section-heading">Errors<span class="heading-rule"></span></h2>
+        <p class="subtle">{{ payload.errors|length }} error event(s)</p>
+      </div>
     </div>
-    {% for error in payload.errors %}
-      <article class="error-item">
-        <div class="error-head">
-          <span>{{ error.ts_label }}</span>
-          <code>{{ error.type }}</code>
-        </div>
-        <p>{{ error.summary }}</p>
-        <details>
-          <summary>Payload</summary>
-          <pre>{{ error.payload | tojson(indent=2) }}</pre>
-        </details>
-      </article>
-    {% endfor %}
+    <div class="error-list">
+      {% for error in payload.errors %}
+        <article class="error-item">
+          <div class="error-head">
+            <span class="mono subtle">{{ error.ts_short }}</span>
+            <code class="type-tag">{{ error.type }}</code>
+            <span class="lane-tag lane-{{ error.lane }}">{{ error.lane }}</span>
+          </div>
+          <p class="error-summary">{{ error.summary }}</p>
+          <details>
+            <summary>Payload</summary>
+            <pre class="data-block">{{ error.payload | tojson(indent=2) }}</pre>
+          </details>
+        </article>
+      {% endfor %}
+    </div>
   </section>
 {% endif %}
 
-<section class="panel">
+<section class="panel timeline-panel" id="timeline">
   <div class="panel-title">
-    <h2>Timeline</h2>
-    <p class="subtle">{{ payload.timeline|length }} item(s)</p>
+    <div>
+      <h2 class="section-heading">Timeline<span class="heading-rule"></span></h2>
+      <p class="subtle"><span data-role="timeline-count">{{ payload.timeline|length }}</span> 条事件 · 按 turn 分组</p>
+    </div>
   </div>
-  <div class="timeline">
+
+  <aside class="how-to-read">
+    <span class="eyebrow">如何阅读</span>
+    <p>
+      每一条 <strong>llm.exchange</strong> 卡片里 ——
+      <span class="arrow-left">→</span> 左列是 request（发给模型的最后一条消息），
+      <span class="arrow-right">←</span> 右列是 response（模型输出 / 调用的 tool）。
+      <strong>tool.&lt;name&gt;</strong> 卡片显示 args / result。
+      底部 <code>payload</code> 折叠区是原始 JSON。
+    </p>
+  </aside>
+
+  <div class="ruler" aria-label="time ruler">
+    <div class="ruler-track">
+      {% for marker in payload.ruler %}
+        <a class="ruler-mark lane-bg-{{ marker.lane }} status-ruler-{{ marker.status }}"
+           href="#ti-{{ marker.seq }}"
+           style="left: {{ marker.offset_pct }}%; width: {{ marker.width_pct }}%"
+           title="{{ marker.ts_short }} · {{ marker.type }}"></a>
+      {% endfor %}
+    </div>
+    <div class="ruler-labels">
+      <span class="mono">{{ payload.run.started_at_label }}</span>
+      <span class="mono">{{ payload.run.duration_label }}</span>
+      <span class="mono">{{ payload.run.finished_at_label }}</span>
+    </div>
+  </div>
+
+  <div class="timeline-filters" id="timeline-filters">
+    <div class="filter-group">
+      <span class="filter-label">lane</span>
+      <button class="filter-chip active" type="button" data-filter-lane="__all__">all</button>
+      {% for lane in payload.facets.lanes %}
+        <button class="filter-chip lane-{{ lane }}" type="button" data-filter-lane="{{ lane }}">{{ lane }}</button>
+      {% endfor %}
+    </div>
+    <div class="filter-group">
+      <span class="filter-label">status</span>
+      <button class="filter-chip active" type="button" data-filter-status="__all__">all</button>
+      <button class="filter-chip" type="button" data-filter-status="ok">ok</button>
+      <button class="filter-chip" type="button" data-filter-status="error">error</button>
+      <button class="filter-chip" type="button" data-filter-status="info">info</button>
+      <button class="filter-chip" type="button" data-filter-status="skipped">skipped</button>
+    </div>
+    <label class="search-inline">
+      <span>搜索</span>
+      <input type="search" id="timeline-search" placeholder="type / summary / tool / seq">
+    </label>
+  </div>
+
+  <div class="timeline" id="timeline" data-run-started="{{ payload.run.started_at }}">
     {% for item in payload.timeline %}
-      <article class="timeline-item">
-        <div class="timeline-rail lane-{{ item.lane }}"></div>
-        <div class="timeline-card">
-          <div class="timeline-head">
-            <div>
-              <span class="status status-{{ item.status }}">{{ item.status }}</span>
-              <strong>{{ item.type }}</strong>
-            </div>
-            <span class="subtle">{{ item.ts_label }}</span>
-          </div>
-          <p>{{ item.summary }}</p>
-          <details>
-            <summary>Payload / Raw Events</summary>
-            <div class="detail-stack">
-              <pre>{{ item.payload | tojson(indent=2) }}</pre>
-              <pre>{{ item.raw_events | tojson(indent=2) }}</pre>
-            </div>
-          </details>
+      {% if item.turn is not none and loop.changed(item.turn) %}
+        <div class="turn-divider" data-turn="{{ item.turn }}">
+          <span class="turn-badge">turn {{ item.turn }}</span>
+          <span class="turn-line"></span>
         </div>
-      </article>
+      {% endif %}
+      {% include "partials/timeline_item.html" %}
     {% endfor %}
   </div>
 </section>
 
-<section class="panel">
+<section class="panel" id="artifacts">
   <div class="panel-title">
-    <h2>Related Artifacts</h2>
-    <p class="subtle">{{ payload.artifacts|length }} file(s)</p>
+    <div>
+      <h2 class="section-heading">Related Artifacts<span class="heading-rule"></span></h2>
+      <p class="subtle">{{ payload.artifacts|length }} 个文件 · 点开可预览文本</p>
+    </div>
   </div>
   {% if payload.artifacts %}
     <div class="artifact-list">
       {% for artifact in payload.artifacts %}
         <a class="artifact-card" href="{{ artifact.preview_url }}" target="_blank" rel="noreferrer">
-          <div class="chips">
-            <span class="chip">{{ artifact.artifact_kind or "artifact" }}</span>
+          <div class="artifact-head">
+            <span class="chip chip-accent">{{ artifact.artifact_kind or "artifact" }}</span>
+            <code class="artifact-path">{{ artifact.relative_path }}</code>
+          </div>
+          <div class="artifact-events">
             {% for event_type in artifact.event_types %}
-              <span class="chip">{{ event_type }}</span>
+              <span class="chip chip-ghost">{{ event_type }}</span>
             {% endfor %}
           </div>
-          <code>{{ artifact.relative_path }}</code>
         </a>
       {% endfor %}
     </div>

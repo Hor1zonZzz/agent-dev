@@ -1,0 +1,177 @@
+<article class="timeline-item"
+         id="ti-{{ item.seq }}"
+         data-seq="{{ item.seq }}"
+         data-lane="{{ item.lane }}"
+         data-status="{{ item.status }}"
+         data-turn="{{ item.turn if item.turn is not none else '' }}"
+         data-type="{{ item.type }}"
+         data-search-blob="{{ (item.type ~ ' ' ~ item.summary ~ ' ' ~ (item.surface.tool_name or '')) | lower }}">
+  <div class="timeline-rail lane-bg-{{ item.lane }}">
+    {% if item.offset_pct is defined %}
+      <span class="rail-dot" style="top: 0;"></span>
+    {% endif %}
+  </div>
+  <div class="timeline-card status-{{ item.status }}">
+    <div class="timeline-head">
+      <div class="head-left">
+        <span class="status status-{{ item.status }}">{{ item.status }}</span>
+        <strong class="type-name">{{ item.type }}</strong>
+        <span class="lane-tag lane-{{ item.lane }}">{{ item.lane }}</span>
+        {% if item.turn is not none %}
+          <span class="chip chip-turn">T{{ item.turn }}</span>
+        {% endif %}
+        {% if item.pair_duration_label and item.pair_duration_ms > 0 %}
+          <span class="chip chip-duration" title="pair duration">{{ item.pair_duration_label }}</span>
+        {% endif %}
+      </div>
+      <div class="head-right">
+        <span class="mono subtle" title="seq {{ item.seq }}">#{{ item.seq }}</span>
+        <span class="mono subtle">{{ item.ts_short }}</span>
+      </div>
+    </div>
+
+    {% set s = item.surface %}
+    {% if s and s.kind == 'llm_exchange' %}
+      <div class="exchange">
+        <div class="exchange-col exchange-req">
+          <div class="exchange-col-head">
+            <span class="exchange-label">→ request</span>
+            {% if s.message_count is not none %}<span class="kv">messages <strong>{{ s.message_count }}</strong></span>{% endif %}
+            {% if s.tool_count is not none %}<span class="kv">tools <strong>{{ s.tool_count }}</strong></span>{% endif %}
+            {% if s.last_message_role %}<span class="chip chip-role role-{{ s.last_message_role }}">{{ s.last_message_role }}</span>{% endif %}
+          </div>
+          {% if s.last_message_preview %}
+            <blockquote class="quote">{{ s.last_message_preview }}</blockquote>
+          {% endif %}
+        </div>
+        <div class="exchange-col exchange-res">
+          <div class="exchange-col-head">
+            <span class="exchange-label">← response</span>
+            {% if s.tool_call_count %}
+              <span class="kv">tool_calls <strong>{{ s.tool_call_count }}</strong></span>
+            {% else %}
+              <span class="chip chip-ghost">final</span>
+            {% endif %}
+          </div>
+          {% if s.content_preview %}
+            <blockquote class="quote">{{ s.content_preview }}</blockquote>
+          {% endif %}
+          {% if s.reasoning_preview %}
+            <details class="reasoning">
+              <summary>reasoning</summary>
+              <blockquote class="quote subtle-quote">{{ s.reasoning_preview }}</blockquote>
+            </details>
+          {% endif %}
+          {% if s.tool_call_names %}
+            <div class="tool-call-row">
+              {% for name in s.tool_call_names %}
+                <span class="chip chip-tool">⚙ {{ name }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    {% elif s and s.kind == 'tool' %}
+      <div class="tool-card">
+        <div class="tool-head">
+          <span class="exchange-label">⚙ {{ s.tool_name or 'tool' }}</span>
+          {% if item.pair_duration_label and item.pair_duration_ms > 0 %}
+            <span class="kv">duration <strong>{{ item.pair_duration_label }}</strong></span>
+          {% endif %}
+        </div>
+        {% if s.arguments_preview %}
+          <div class="tool-section">
+            <span class="exchange-label">args</span>
+            <pre class="data-block mini">{{ s.arguments_preview }}</pre>
+          </div>
+        {% endif %}
+        {% if s.result_preview %}
+          <div class="tool-section">
+            <span class="exchange-label">result</span>
+            <pre class="data-block mini">{{ s.result_preview }}</pre>
+          </div>
+        {% endif %}
+        {% if s.error_message %}
+          <div class="tool-section">
+            <span class="exchange-label err">error</span>
+            <pre class="data-block mini err">{{ s.error_message }}</pre>
+          </div>
+        {% endif %}
+      </div>
+    {% elif s and s.kind == 'llm_request' %}
+      <div class="summary-line">
+        <span class="kv">messages <strong>{{ s.message_count }}</strong></span>
+        <span class="kv">tools <strong>{{ s.tool_count }}</strong></span>
+        {% if s.last_message_role %}<span class="chip chip-role role-{{ s.last_message_role }}">{{ s.last_message_role }}</span>{% endif %}
+      </div>
+      {% if s.last_message_preview %}<blockquote class="quote">{{ s.last_message_preview }}</blockquote>{% endif %}
+    {% elif s and s.kind == 'llm_response' %}
+      <div class="summary-line">
+        {% if s.tool_call_count %}
+          <span class="kv">tool_calls <strong>{{ s.tool_call_count }}</strong></span>
+        {% else %}
+          <span class="chip chip-ghost">final</span>
+        {% endif %}
+      </div>
+      {% if s.content_preview %}<blockquote class="quote">{{ s.content_preview }}</blockquote>{% endif %}
+      {% if s.tool_call_names %}
+        <div class="tool-call-row">
+          {% for name in s.tool_call_names %}<span class="chip chip-tool">⚙ {{ name }}</span>{% endfor %}
+        </div>
+      {% endif %}
+    {% elif s and s.kind == 'artifact' %}
+      <div class="summary-line">
+        {% if s.artifact_kind %}<span class="chip chip-accent">{{ s.artifact_kind }}</span>{% endif %}
+        {% if s.path %}<code class="artifact-path">{{ s.path }}</code>{% endif %}
+      </div>
+      <p class="summary-text">{{ item.summary }}</p>
+    {% elif s and s.kind == 'dispatch' %}
+      <div class="summary-line">
+        {% if s.message_count is not none %}<span class="kv">messages <strong>{{ s.message_count }}</strong></span>{% endif %}
+        {% if s.inbox_size is not none %}<span class="kv">inbox <strong>{{ s.inbox_size }}</strong></span>{% endif %}
+        {% if s.session_id %}<span class="chip chip-ghost">@{{ s.session_id }}</span>{% endif %}
+      </div>
+      {% if s.preview %}<blockquote class="quote">{{ s.preview }}</blockquote>{% endif %}
+    {% elif s and s.kind == 'memory' %}
+      <div class="summary-line">
+        {% if s.event_count is not none %}<span class="kv">events <strong>{{ s.event_count }}</strong></span>{% endif %}
+        {% if s.turn_count is not none %}<span class="kv">turns <strong>{{ s.turn_count }}</strong></span>{% endif %}
+      </div>
+      <p class="summary-text">{{ item.summary }}</p>
+      {% if s.error_message %}<pre class="data-block mini err">{{ s.error_message }}</pre>{% endif %}
+    {% elif s and s.kind == 'runtime' %}
+      <div class="summary-line">
+        {% if s.agent_name %}<span class="kv">agent <strong>{{ s.agent_name }}</strong></span>{% endif %}
+        {% if s.model %}<span class="kv">model <strong>{{ s.model }}</strong></span>{% endif %}
+        {% if s.turn is not none %}<span class="chip chip-turn">T{{ s.turn }}</span>{% endif %}
+        {% if s.count is not none %}<span class="kv">count <strong>{{ s.count }}</strong></span>{% endif %}
+      </div>
+      <p class="summary-text">{{ item.summary }}</p>
+      {% if s.final_output_preview %}<blockquote class="quote">{{ s.final_output_preview }}</blockquote>{% endif %}
+      {% if s.tool_names %}
+        <div class="tool-call-row">
+          {% for name in s.tool_names %}<span class="chip chip-tool">{{ name }}</span>{% endfor %}
+        </div>
+      {% endif %}
+      {% if s.previews %}
+        <div class="preview-list">
+          {% for p in s.previews %}<blockquote class="quote">{{ p }}</blockquote>{% endfor %}
+        </div>
+      {% endif %}
+      {% if s.error_message %}<pre class="data-block mini err">{{ s.error_type }}: {{ s.error_message }}</pre>{% endif %}
+    {% else %}
+      <p class="summary-text">{{ item.summary }}</p>
+    {% endif %}
+
+    <details class="payload-details">
+      <summary>
+        <span class="summary-text-inline">payload{% if item.event_count > 1 %} · {{ item.event_count }} events{% endif %}</span>
+        <button type="button" class="copy-btn" data-copy-target="next-pre" title="copy JSON">copy</button>
+      </summary>
+      <div class="detail-stack">
+        <pre class="data-block">{{ item.payload | tojson(indent=2) }}</pre>
+        <pre class="data-block">{{ item.raw_events | tojson(indent=2) }}</pre>
+      </div>
+    </details>
+  </div>
+</article>

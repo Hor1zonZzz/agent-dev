@@ -1,80 +1,175 @@
 {% extends "base.html" %}
 
+{% macro active_filter_chips(filters) %}
+  {% set active = [] %}
+  {% for key, value in filters.items() %}
+    {% if value and key != 'limit' %}
+      {% set _ = active.append((key, value)) %}
+    {% endif %}
+  {% endfor %}
+  {% if active %}
+    <div class="active-filters">
+      {% for key, value in active %}
+        <span class="active-filter-chip">
+          <span class="active-filter-key">{{ key }}</span>
+          <span class="active-filter-value">{{ value }}</span>
+        </span>
+      {% endfor %}
+      <a class="active-filter-clear" href="/traces">清除</a>
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{% macro run_card(run) %}
+<a class="run-card status-{{ run.status }}{% if run.is_running %} is-running{% endif %}"
+   href="/traces/{{ run.run_id }}"
+   data-run-id="{{ run.run_id }}"
+   data-status="{{ run.status }}"
+   data-run-kind="{{ run.run_kind }}"
+   data-source="{{ run.source }}">
+
+  <div class="run-card-inner">
+    <div class="run-card-top">
+      <span class="status status-{{ run.status }}">
+        {% if run.is_running %}<span class="pulse-dot"></span>{% endif %}
+        {{ run.status }}{% if run.is_running %} · running{% endif %}
+      </span>
+      <span class="run-kind-tag">{{ run.run_kind }}</span>
+      <span class="run-time" title="{{ run.started_at_label }}">{{ run.started_at_label }}</span>
+    </div>
+
+    <h2 class="run-title" data-role="summary">{{ run.summary }}</h2>
+
+    <p class="run-meta-line subtle">
+      <span>{{ run.source }}</span>
+      {% if run.session_id %}<span>· @{{ run.session_id }}</span>{% endif %}
+      <span class="run-meta-sep">·</span>
+      <span class="mono">{{ run.duration_label }}</span>
+      <span class="mono">· <span data-role="event-count">{{ run.event_count }}</span> evt</span>
+      {% if run.turn_count %}<span class="mono">· {{ run.turn_count }} T</span>{% endif %}
+      {% if run.tool_count %}<span class="mono">· {{ run.tool_count }} tool</span>{% endif %}
+      {% if run.artifact_count %}<span class="mono">· {{ run.artifact_count }} art</span>{% endif %}
+    </p>
+
+    <div class="lane-bar compact" title="lane distribution">
+      {% for seg in run.lane_distribution %}
+        <span class="lane-bar-seg lane-bg-{{ seg.lane }}"
+              style="width: {{ seg.pct }}%"
+              title="{{ seg.lane }} · {{ seg.count }}"></span>
+      {% endfor %}
+    </div>
+
+    {% if run.first_error %}
+      <p class="error-callout">▲ 首个错误：{{ run.first_error.summary }}</p>
+    {% endif %}
+  </div>
+
+  <span class="run-card-chevron" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 6l6 6-6 6"/>
+    </svg>
+  </span>
+</a>
+{% endmacro %}
+
 {% block content %}
-<section class="panel">
-  <form class="filters" method="get" action="/traces">
-    <label>
+
+<section class="intro-panel">
+  <p class="eyebrow">trace observatory · localhost</p>
+  <h1 class="intro-headline">看一眼 Anna 刚才在想什么。</h1>
+  <p class="intro-lede">
+    每一条 run 是 agent 的一次执行。点开任意一条，按 turn 一路看下去
+    —— prompt 怎么组装、模型怎么回、工具怎么被调、最后写入了哪些 artifact。
+  </p>
+  <p class="intro-hint subtle">
+    不清楚 lane / turn 是什么？点右上角 <button type="button" class="inline-glossary-trigger">?</button> 打开词汇表。
+  </p>
+</section>
+
+<details class="panel filters-panel" id="filters-panel"{% if payload.filters.day or payload.filters.run_kind or payload.filters.source or payload.filters.status or payload.filters.session_id %} open{% endif %}>
+  <summary class="filters-summary">
+    <span class="filter-trigger">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M6 12h12M10 18h4"/></svg>
+      筛选
+    </span>
+    {{ active_filter_chips(payload.filters) }}
+    <span class="subtle filter-count">
+      {% if payload.runs %}共 <span data-role="run-count">{{ payload.count }}</span> 条{% endif %}
+    </span>
+  </summary>
+  <form class="filters" method="get" action="/traces" id="filters-form">
+    <label class="filter-field">
       <span>Day</span>
       <input type="date" name="day" value="{{ payload.filters.day }}">
     </label>
-    <label>
+    <label class="filter-field">
       <span>Run Kind</span>
-      <input type="text" name="run_kind" value="{{ payload.filters.run_kind }}" placeholder="wechat_chat">
+      <select name="run_kind">
+        <option value="">任意</option>
+        {% for value in payload.options.run_kinds %}
+          <option value="{{ value }}"{% if value == payload.filters.run_kind %} selected{% endif %}>{{ value }}</option>
+        {% endfor %}
+      </select>
     </label>
-    <label>
+    <label class="filter-field">
       <span>Source</span>
-      <input type="text" name="source" value="{{ payload.filters.source }}" placeholder="wechat">
+      <select name="source">
+        <option value="">任意</option>
+        {% for value in payload.options.sources %}
+          <option value="{{ value }}"{% if value == payload.filters.source %} selected{% endif %}>{{ value }}</option>
+        {% endfor %}
+      </select>
     </label>
-    <label>
+    <label class="filter-field">
       <span>Status</span>
-      <input type="text" name="status" value="{{ payload.filters.status }}" placeholder="ok/error">
+      <select name="status">
+        <option value="">任意</option>
+        {% for value in ['ok', 'error', 'info', 'skipped'] %}
+          <option value="{{ value }}"{% if value == payload.filters.status %} selected{% endif %}>{{ value }}</option>
+        {% endfor %}
+      </select>
     </label>
-    <label>
+    <label class="filter-field">
       <span>Session</span>
       <input type="text" name="session_id" value="{{ payload.filters.session_id }}" placeholder="u1">
     </label>
-    <label>
+    <label class="filter-field">
       <span>Limit</span>
       <input type="number" min="1" max="200" name="limit" value="{{ payload.filters.limit }}">
     </label>
-    <button type="submit">Apply</button>
+    <div class="filter-actions">
+      <button type="submit" class="btn-primary">Apply</button>
+      <a href="/traces" class="btn-ghost">Reset</a>
+    </div>
   </form>
-</section>
+</details>
 
-<section class="panel">
+<section class="panel runs-panel">
   <div class="panel-title">
-    <h1>Runs</h1>
-    <p class="subtle">{{ payload.count }} run(s)</p>
+    <div>
+      <h2 class="section-heading">Runs<span class="heading-rule"></span></h2>
+      <p class="subtle">按时间倒序 · 实时刷新 · 点开查看 prompt 路径</p>
+    </div>
+    <span class="live-indicator" id="live-indicator" data-state="idle">
+      <span class="live-dot"></span>
+      <span data-role="live-label">live</span>
+    </span>
   </div>
 
   {% if payload.empty %}
     <div class="empty-state">
+      <p class="eyebrow">nothing yet</p>
       <h2>还没有 trace run</h2>
-      <p>启动 `wechat.py`、planner 或其他运行入口后，这里会显示新的执行轨迹。</p>
+      <p>启动 <code>wechat.py</code>、planner 或 memory compression 后，新的执行轨迹会在这里出现。</p>
     </div>
   {% else %}
-    <div class="run-list">
+    <div class="run-list" id="run-list">
       {% for run in payload.runs %}
-        <a class="run-card status-{{ run.status }}" href="/traces/{{ run.run_id }}">
-          <div class="run-card-top">
-            <div class="chips">
-              <span class="chip">{{ run.run_kind }}</span>
-              <span class="chip">{{ run.source }}</span>
-              {% if run.session_id %}
-                <span class="chip">{{ run.session_id }}</span>
-              {% endif %}
-            </div>
-            <span class="status status-{{ run.status }}">{{ run.status }}</span>
-          </div>
-          <h2>{{ run.summary }}</h2>
-          <div class="run-metrics">
-            <span>开始 {{ run.started_at_label }}</span>
-            <span>耗时 {{ run.duration_label }}</span>
-            <span>{{ run.event_count }} events</span>
-            <span>{{ run.tool_count }} tools</span>
-            <span>{{ run.artifact_count }} artifacts</span>
-          </div>
-          <div class="lane-row">
-            {% for lane, count in run.lane_counts.items() %}
-              <span class="lane-tag lane-{{ lane }}">{{ lane }} {{ count }}</span>
-            {% endfor %}
-          </div>
-          {% if run.first_error %}
-            <p class="error-callout">首个错误: {{ run.first_error.summary }}</p>
-          {% endif %}
-        </a>
+        {{ run_card(run) }}
       {% endfor %}
     </div>
   {% endif %}
 </section>
+
+<script id="runs-initial-payload" type="application/json">{{ payload | tojson }}</script>
 {% endblock %}

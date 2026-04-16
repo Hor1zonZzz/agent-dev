@@ -5,17 +5,27 @@
   <div class="panel-title">
     <div>
       <h1>Artifact Preview</h1>
-      <p class="subtle">{{ payload.artifact_kind }} · {{ payload.relative_path }}</p>
+      <p class="subtle">
+        <span class="chip chip-accent">{{ payload.artifact_kind }}</span>
+        <code class="mono">{{ payload.relative_path }}</code>
+      </p>
     </div>
-    <a class="link-back" href="/traces">返回列表</a>
+    <a class="link-back" href="/traces">← 返回列表</a>
   </div>
 
-  <pre class="preview-block">{{ payload.content_preview }}</pre>
+  <div class="artifact-meta">
+    <span class="kv">lines <strong>{{ payload.line_count }}</strong></span>
+    <span class="kv">chars <strong>{{ payload.char_count }}</strong></span>
+    {% if payload.truncated %}<span class="chip chip-ghost">preview 截断</span>{% endif %}
+    <button type="button" class="copy-btn" data-copy-target="#preview-block">copy</button>
+  </div>
+
+  <pre class="data-block preview-block" id="preview-block">{{ payload.content_preview }}</pre>
 
   {% if payload.truncated %}
     <details class="expand-full">
-      <summary>展开完整内容</summary>
-      <pre class="preview-block">{{ payload.full_content }}</pre>
+      <summary>展开完整内容（{{ payload.char_count }} chars）</summary>
+      <pre class="data-block preview-block">{{ payload.full_content }}</pre>
     </details>
   {% endif %}
 </section>

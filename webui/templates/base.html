@@ -4,18 +4,107 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ page_title }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
     <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+    <script>
+      (function () {
+        var stored = window.localStorage.getItem("trace-theme");
+        if (stored === "dark" || (stored === null && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
   </head>
-  <body data-stream-url="{{ stream_url if stream_url is defined else '' }}">
+  <body data-stream-url="{{ stream_url if stream_url is defined else '' }}"
+        data-run-id="{{ run_id if run_id is defined else '' }}">
     <header class="shell-header">
-      <div>
-        <a class="brand" href="/traces">Trace WebUI</a>
-        <p class="subtle">本机只读追踪观察台</p>
+      <div class="brand-row">
+        <a class="brand" href="/traces">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <path d="M3 18 L8 12 L12 15 L17 7 L21 11"/>
+              <circle cx="17" cy="7" r="1.8" fill="currentColor"/>
+            </svg>
+          </span>
+          <span class="brand-text">
+            <span class="brand-name">Trace</span>
+            <span class="brand-slash">/</span>
+            <span class="brand-kicker">prompt paths for Anna</span>
+          </span>
+        </a>
+      </div>
+      <div class="header-tools">
+        <button id="glossary-toggle" class="icon-btn glossary-btn" type="button"
+                aria-label="词汇表" title="词汇表 (按 ? 打开)">
+          <span class="glossary-glyph">?</span>
+        </button>
+        <button id="theme-toggle" class="icon-btn" type="button" aria-label="切换主题" title="切换主题">
+          <span class="theme-light">☽</span>
+          <span class="theme-dark">☀</span>
+        </button>
       </div>
     </header>
     <main class="shell-main">
       {% block content %}{% endblock %}
     </main>
+
+    <div id="glossary" class="glossary" hidden aria-modal="true" role="dialog" aria-labelledby="glossary-title">
+      <div class="glossary-backdrop" data-glossary-close></div>
+      <aside class="glossary-panel">
+        <header class="glossary-head">
+          <div>
+            <p class="eyebrow">reading guide</p>
+            <h2 id="glossary-title">如何看懂这里</h2>
+          </div>
+          <button type="button" class="icon-btn" data-glossary-close aria-label="关闭">✕</button>
+        </header>
+        <section class="glossary-section">
+          <h3>基本概念</h3>
+          <dl>
+            <dt>Run</dt>
+            <dd>agent 的一次执行 —— 从接到一条用户输入，到它停止调用工具或结束。</dd>
+            <dt>Turn</dt>
+            <dd>一轮 LLM 决策：模型生成一段回复 + 可选的一批 tool 调用。一个 run 常见多个 turn。</dd>
+            <dt>Lane</dt>
+            <dd>事件分类，用颜色区分。</dd>
+          </dl>
+        </section>
+        <section class="glossary-section">
+          <h3>Lane 速查</h3>
+          <ul class="lane-legend">
+            <li><span class="legend-swatch lane-bg-dispatch"></span><strong>dispatch</strong>入口事件：消息入队、注入到活跃 run。</li>
+            <li><span class="legend-swatch lane-bg-runtime"></span><strong>runtime</strong>agent 生命周期：started / turn / inbox / finished / failed。</li>
+            <li><span class="legend-swatch lane-bg-llm"></span><strong>llm</strong>LLM 请求与响应（成对展示为 <code>llm.exchange</code>）。</li>
+            <li><span class="legend-swatch lane-bg-tool"></span><strong>tool</strong>工具调用（成对展示为 <code>tool.&lt;name&gt;</code>）。</li>
+            <li><span class="legend-swatch lane-bg-scheduler"></span><strong>scheduler</strong>异步调度（Hermes / planner）。</li>
+            <li><span class="legend-swatch lane-bg-memory"></span><strong>memory</strong>记忆压缩的开始与结束。</li>
+            <li><span class="legend-swatch lane-bg-artifact"></span><strong>artifact</strong>落盘产物：plan / diary / memory / history。</li>
+          </ul>
+        </section>
+        <section class="glossary-section">
+          <h3>怎么用</h3>
+          <ol>
+            <li>列表页点开一条 run，进入它的 prompt 路径。</li>
+            <li>详情页先读顶上那段话，大致知道这个 run 发生了什么。</li>
+            <li>Timeline 按 turn 分组 —— 左列是 request（发给模型的最后消息），右列是 response（模型输出 / 调用的 tool）。</li>
+            <li>底部 <code>payload</code> 折叠区可看原始 JSON。</li>
+          </ol>
+        </section>
+        <footer class="glossary-foot">
+          <span class="subtle">快捷键</span>
+          <kbd>?</kbd> 打开词汇表 · <kbd>Esc</kbd> 关闭
+        </footer>
+      </aside>
+    </div>
+
+    <div id="update-banner" class="update-banner" hidden>
+      <span class="update-dot"></span>
+      <span id="update-banner-text">有更新</span>
+      <button type="button" id="update-apply" class="update-apply">立即应用</button>
+    </div>
     <script src="{{ url_for('static', path='app.js') }}" defer></script>
   </body>
-  </html>
+</html>
