@@ -12,6 +12,21 @@ from pathlib import Path
 from loguru import logger
 from openai import AsyncOpenAI
 
+from core.history import append_to_history, load_recent_messages
+from core.meta import (
+    get_dispatch_info,
+    get_last_activity,
+    get_last_anna_message,
+    get_next_proactive_at,
+    load_meta,
+    save_meta,
+    update_dispatch_info,
+    update_last_activity,
+    update_last_anna_message,
+    update_next_proactive_at,
+)
+from core.trace import RunMeta, TraceRecorder, TraceSink, get_default_trace_sink
+
 # ── Configuration ─────────────────────────────────────────────────────
 
 HISTORY_DIR = Path(__file__).resolve().parent.parent / "history"
@@ -174,129 +189,7 @@ def load_latest_summary() -> str | None:
 
 
 def load_for_llm(history_path: Path) -> tuple[list[dict], str | None]:
-    """Load messages for the LLM context window.
-
-    Returns
-    -------
-    (recent_messages, memory_text)
-        recent_messages : the last *RECENT_K* messages from history
-        memory_text     : combined summary markdown, or None
-    """
-    full: list[dict] = []
-    if history_path.exists():
-        full = json.loads(history_path.read_text(encoding="utf-8"))
-
-    memory_text = load_latest_summary()
-    recent = full[-RECENT_K:] if full else []
-    recent = _trim_orphan_tool_prefix(recent)
-    return recent, memory_text
-
-
-def _trim_orphan_tool_prefix(messages: list[dict]) -> list[dict]:
-    """Drop leading ``role=tool`` messages whose matching ``tool_calls`` got
-    sliced out of the window. OpenAI-compatible APIs reject histories where a
-    tool response has no preceding ``assistant`` message with ``tool_calls``.
-    """
-    i = 0
-    while i < len(messages) and messages[i].get("role") == "tool":
-        i += 1
-    return messages[i:]
-
-
-# ── Sidecar meta (last_activity_at, etc.) ────────────────────────────
-
-
-def _meta_path(history_path: Path) -> Path:
-    """Return the sibling ``.meta.json`` path for a history file."""
-    return history_path.with_suffix(".meta.json")
-
-
-def load_meta(history_path: Path) -> dict:
-    p = _meta_path(history_path)
-    if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        logger.warning("Failed to read meta at {}, ignoring", p)
-        return {}
-
-
-def save_meta(history_path: Path, meta: dict) -> None:
-    p = _meta_path(history_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _get_iso(history_path: Path, key: str) -> datetime | None:
-    s = load_meta(history_path).get(key)
-    if not s:
-        return None
-    try:
-        return datetime.fromisoformat(s)
-    except ValueError:
-        return None
-
-
-def _set_iso(history_path: Path, key: str, when: datetime | None = None) -> None:
-    meta = load_meta(history_path)
-    meta[key] = (when or datetime.now()).isoformat()
-    save_meta(history_path, meta)
-
-
-def get_last_activity(history_path: Path) -> datetime | None:
-    return _get_iso(history_path, "last_activity_at")
-
-
-def update_last_activity(history_path: Path, when: datetime | None = None) -> None:
-    _set_iso(history_path, "last_activity_at", when)
-
-
-def get_last_anna_message(history_path: Path) -> datetime | None:
-    return _get_iso(history_path, "last_anna_message_at")
-
-
-def update_last_anna_message(history_path: Path, when: datetime | None = None) -> None:
-    _set_iso(history_path, "last_anna_message_at", when)
-
-
-def get_next_proactive_at(history_path: Path) -> datetime | None:
-    return _get_iso(history_path, "next_proactive_at")
-
-
-def update_next_proactive_at(history_path: Path, when: datetime) -> None:
-    _set_iso(history_path, "next_proactive_at", when)
-
-
-def update_dispatch_info(
-    history_path: Path,
-    user_id: str,
-    context_token: str | None,
-) -> None:
-    """Persist the raw user_id and most recent context_token so the proactive
-    loop can dispatch outbound messages without an inbound message first."""
-    meta = load_meta(history_path)
-    meta["user_id"] = user_id
-    if context_token is not None:
-        meta["context_token"] = context_token
-    save_meta(history_path, meta)
-
-
-def get_dispatch_info(history_path: Path) -> tuple[str | None, str | None]:
-    meta = load_meta(history_path)
-    return meta.get("user_id"), meta.get("context_token")
-
-
-def append_to_history(history_path: Path, new_messages: list[dict]) -> None:
-    """Append *new_messages* to the history JSON file (never truncate)."""
-    existing: list[dict] = []
-    if history_path.exists():
-        existing = json.loads(history_path.read_text(encoding="utf-8"))
-    existing.extend(new_messages)
-    history_path.parent.mkdir(parents=True, exist_ok=True)
-    history_path.write_text(
-        json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    return load_recent_messages(history_path, RECENT_K), load_latest_summary()
 
 
 # ── Background compression ───────────────────────────────────────────
@@ -318,7 +211,7 @@ def _latest_activity(meta: dict) -> datetime | None:
     return max(stamps) if stamps else None
 
 
-async def maybe_compress(history_path: Path) -> None:
+async def maybe_compress(history_path: Path, trace_sink: TraceSink | None = None) -> None:
     """Spawn a background compression task when either:
     - buffer_full: COMPRESS_EVERY meaningful messages accumulated since last compression, or
     - idle: both sides have been silent for >= IDLE_COMPRESS_MINUTES and there is new content.
@@ -360,10 +253,16 @@ async def maybe_compress(history_path: Path) -> None:
         "Spawning memory compression: reason={}, messages[{}:{}] ({} meaningful)",
         reason, start_idx, end_idx, meaningful,
     )
-    _compress_task = asyncio.create_task(_compress(history_path, start_idx, end_idx))
+    _compress_task = asyncio.create_task(
+        _compress(history_path, start_idx, end_idx, trace_sink=trace_sink or get_default_trace_sink())
+    )
 
 
-async def compression_watchdog(history_dir: Path) -> None:
+async def compression_watchdog(
+    history_dir: Path,
+    *,
+    trace_sink: TraceSink | None = None,
+) -> None:
     """Forever-loop: periodically check every history file in ``history_dir`` for
     the idle-compression trigger. Complements the inline post-turn check in worker
     — necessary because idle time elapses without any event to hook into."""
@@ -377,7 +276,7 @@ async def compression_watchdog(history_dir: Path) -> None:
                 for history_path in history_dir.glob("*.json"):
                     if history_path.name.endswith(".meta.json"):
                         continue
-                    await maybe_compress(history_path)
+                    await maybe_compress(history_path, trace_sink=trace_sink)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -385,9 +284,30 @@ async def compression_watchdog(history_dir: Path) -> None:
         await asyncio.sleep(WATCHDOG_INTERVAL_SECONDS)
 
 
-async def _compress(history_path: Path, start_idx: int = 0, end_idx: int | None = None) -> None:
+async def _compress(
+    history_path: Path,
+    start_idx: int = 0,
+    end_idx: int | None = None,
+    *,
+    trace_sink: TraceSink | None = None,
+) -> None:
     """Background task: slice history → call LLM (incremental if prior summary exists)
     → write only non-empty dimension md files → advance the meta pointer on success."""
+    recorder = TraceRecorder(
+        trace_sink or get_default_trace_sink(),
+        RunMeta(
+            run_kind="memory_compress",
+            source="memory",
+            context={"history_path": str(history_path)},
+        ),
+    )
+    await recorder.emit(
+        lane="memory",
+        type="memory.compression_started",
+        status="ok",
+        summary=f"memory compression started for {history_path.name}",
+        payload={"start_idx": start_idx, "end_idx": end_idx},
+    )
     try:
         messages = json.loads(history_path.read_text(encoding="utf-8"))
         if end_idx is None:
@@ -418,8 +338,19 @@ async def _compress(history_path: Path, start_idx: int = 0, end_idx: int | None 
         written: list[str] = []
         for dim in _SUMMARY_DIMS:
             if sections[dim] and sections[dim] != _EMPTY_MARKER:
-                _write_summary(dim, ts, sections[dim])
+                path = _write_summary(dim, ts, sections[dim])
                 written.append(dim)
+                await recorder.emit(
+                    lane="artifact",
+                    type="artifact.written",
+                    status="ok",
+                    summary=f"memory summary written: {path.name}",
+                    payload={
+                        "artifact_kind": "memory_summary",
+                        "dimension": dim,
+                        "path": str(path),
+                    },
+                )
 
         meta = load_meta(history_path)
         meta["last_compressed_at_index"] = end_idx
@@ -429,7 +360,27 @@ async def _compress(history_path: Path, start_idx: int = 0, end_idx: int | None 
             "Memory compression complete: ts={}, wrote={}, pointer→{}",
             ts, written or "(all empty)", end_idx,
         )
-    except Exception:
+        await recorder.emit(
+            lane="memory",
+            type="memory.compression_finished",
+            status="ok",
+            summary=f"memory compression finished for {history_path.name}",
+            payload={
+                "written_dimensions": written,
+                "last_compressed_at_index": end_idx,
+            },
+        )
+    except Exception as exc:
+        await recorder.emit(
+            lane="memory",
+            type="memory.compression_failed",
+            status="error",
+            summary=f"memory compression failed for {history_path.name}",
+            payload={
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
         logger.exception("Background memory compression failed")
 
 
@@ -469,7 +420,9 @@ def _parse_summary_response(content: str) -> dict[str, str]:
     }
 
 
-def _write_summary(dimension: str, ts: str, content: str) -> None:
+def _write_summary(dimension: str, ts: str, content: str) -> Path:
     dir_path = HISTORY_DIR / dimension
     dir_path.mkdir(parents=True, exist_ok=True)
-    (dir_path / f"{ts}.md").write_text(content, encoding="utf-8")
+    path = dir_path / f"{ts}.md"
+    path.write_text(content, encoding="utf-8")
+    return path
