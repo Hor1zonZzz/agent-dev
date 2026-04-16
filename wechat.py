@@ -103,6 +103,24 @@ def _history_path(user_id: str) -> Path:
 
 _hooks = WeChatHooks()
 
+
+def _drop_end_turn_pairs(messages: list[dict]) -> list[dict]:
+    """Strip end_turn assistant+tool pairs — pure control signals, no conversation content."""
+    end_turn_ids: set[str] = set()
+    keep: list[dict] = []
+    for m in messages:
+        if m.get("role") == "assistant":
+            tcs = m.get("tool_calls") or []
+            names = [(tc.get("function") or {}).get("name") for tc in tcs]
+            if names and all(n == "end_turn" for n in names):
+                for tc in tcs:
+                    end_turn_ids.add(tc.get("id"))
+                continue
+        elif m.get("role") == "tool" and m.get("tool_call_id") in end_turn_ids:
+            continue
+        keep.append(m)
+    return keep
+
 # Inbox tuple: (user_id, text, context_token, is_proactive)
 # is_proactive=True items are synthetic system triggers — gap_hint is skipped
 # and the synthetic user message is stripped from persisted history.
@@ -220,6 +238,7 @@ async def _run_one_iteration() -> None:
         elif gap_hint and new_this_turn and new_this_turn[0].get("role") == "user":
             # Strip gap hint from persisted history — it's a per-run annotation.
             new_this_turn[0] = {**new_this_turn[0], "content": batch_texts[0]}
+        new_this_turn = _drop_end_turn_pairs(new_this_turn)
         append_to_history(history_path, new_this_turn)
         if not is_proactive:
             update_last_activity(history_path)
