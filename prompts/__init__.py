@@ -55,8 +55,8 @@ def build(
             "（今天还没有记录。如果用户问起今天做了什么，诚实说还没开始 / 还没做什么，不要编。）"
         )
 
-    # 7. Current date — refreshed on each build
-    today = datetime.now().strftime("%Y-%m-%d (%A)")
-    sections.append(f"## Current date\nToday is {today}.")
+    # 7. Current time — refreshed on each build
+    now = datetime.now().strftime("%Y-%m-%d %A %H:%M")
+    sections.append(f"## Now\n{now}")
 
     return "\n\n".join(s for s in sections if s)
