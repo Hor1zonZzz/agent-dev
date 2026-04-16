@@ -23,6 +23,7 @@ from loguru import logger
 
 from core.loop import Agent, run
 from core.tools import end_turn, recall_day
+from core.trace import RunMeta, TraceRecorder, TraceSink, get_default_trace_sink
 from hermes.plan import save_plan
 from prompts import build
 
@@ -51,7 +52,11 @@ def _build_planner_agent() -> Agent:
     )
 
 
-async def run_planner() -> bool:
+async def run_planner(
+    *,
+    trace_sink: TraceSink | None = None,
+    recorder: TraceRecorder | None = None,
+) -> bool:
     """Run one planning turn. Returns True if a plan file was produced."""
     now = datetime.now()
     tomorrow = (now + timedelta(days=1)).date()
@@ -70,10 +75,20 @@ async def run_planner() -> bool:
             agent,
             input=[{"role": "user", "content": trigger}],
             max_turns=8,
+            trace_sink=trace_sink or get_default_trace_sink(),
+            run_meta=RunMeta(
+                run_kind="planner",
+                source="planner",
+                run_id=recorder.run_id if recorder else None,
+                start_seq=recorder.seq if recorder else 0,
+                context={"target_date": tomorrow.isoformat()},
+            ),
         )
     except Exception:
         logger.exception("[planner] 规划运行异常")
         return False
+    if recorder is not None:
+        recorder.sync(result.trace_seq)
 
     # Check whether save_plan was actually called and succeeded. The tool
     # returns "已保存 N 条..." on success. Even if she called it, validation

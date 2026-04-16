@@ -1,24 +1,4 @@
-"""In-process scheduler for Hermes daily tasks + nightly self-planner.
-
-Anna's "scheduled life" is tied to whichever host process owns it (e.g.
-``wechat.py``). When the host starts, the scheduler starts; when the host
-shuts down, the scheduler stops with it. There is no catch-up — events that
-fire while the host is offline are simply skipped, on the principle that
-Anna only "lives" while she's reachable.
-
-Event sources (recomputed fresh before every sleep):
-
-* **Planner** — fixed at :data:`PLANNER_TIME` (23:00). Runs
-  :func:`hermes.planner.run_planner`, which lets Anna decide tomorrow's
-  plan.
-* **Hermes tasks** — either from today's plan file (if Anna saved one) or
-  from :data:`DEFAULT_SCHEDULE` mapped onto :mod:`hermes.tasks` (fallback).
-  Plan fully overrides defaults for the day.
-
-The Hermes Python SDK is synchronous, so each Hermes task runs in a worker
-thread via ``asyncio.to_thread`` to keep the host event loop responsive.
-The planner is async-native (calls ``core.loop.run``) and runs inline.
-"""
+"""In-process scheduler for Hermes daily tasks + nightly self-planner."""
 
 from __future__ import annotations
 
@@ -30,43 +10,30 @@ from typing import Literal
 
 from loguru import logger
 
-# (slot_name, daily_time). Used when no plan file exists for the day.
+from core.trace import RunMeta, TraceRecorder, get_default_trace_sink
+
 DEFAULT_SCHEDULE: list[tuple[str, time]] = [
     ("morning", time(8, 0)),
     ("noon", time(12, 0)),
     ("evening", time(21, 0)),
 ]
 
-# When the nightly planner runs. Must stay before the quiet-hour window
-# (00:00-06:00) and after the latest allowed task time (22:30).
 PLANNER_TIME: time = time(23, 0)
 
 
 @dataclass(frozen=True)
 class ScheduledEvent:
-    """One upcoming event the scheduler will fire."""
-
     kind: Literal["planner", "hermes_task", "hermes_slot"]
     when: datetime
-    # hermes_task: (title, instruction); hermes_slot: slot name; planner: ignored.
     payload: tuple[str, str] | str | None = None
 
 
 def _candidates_for_day(day: date) -> list[ScheduledEvent]:
-    """Build the list of events for *day* (without filtering by now)."""
-    # Deferred import: hermes.plan is cheap but keeps the public module
-    # surface minimal when someone imports this file for constants.
     from hermes.plan import read_plan
 
-    events: list[ScheduledEvent] = []
-
-    # Planner is always scheduled, every day.
-    events.append(
-        ScheduledEvent(
-            kind="planner",
-            when=datetime.combine(day, PLANNER_TIME),
-        )
-    )
+    events: list[ScheduledEvent] = [
+        ScheduledEvent(kind="planner", when=datetime.combine(day, PLANNER_TIME))
+    ]
 
     plan = read_plan(day)
     if plan is not None:
@@ -80,11 +47,11 @@ def _candidates_for_day(day: date) -> list[ScheduledEvent]:
                 )
             )
     else:
-        for slot_name, t in DEFAULT_SCHEDULE:
+        for slot_name, slot_time in DEFAULT_SCHEDULE:
             events.append(
                 ScheduledEvent(
                     kind="hermes_slot",
-                    when=datetime.combine(day, t),
+                    when=datetime.combine(day, slot_time),
                     payload=slot_name,
                 )
             )
@@ -93,33 +60,56 @@ def _candidates_for_day(day: date) -> list[ScheduledEvent]:
 
 
 def _next_event(now: datetime) -> ScheduledEvent:
-    """Return the nearest event strictly after *now*.
-
-    Checks today first; if nothing remains today, rolls to tomorrow (which
-    may have a plan file generated tonight by the planner).
-    """
-    for offset in (0, 1, 2):  # today, tomorrow, day-after (safety)
+    for offset in (0, 1, 2):
         day = now.date() + timedelta(days=offset)
-        future = [e for e in _candidates_for_day(day) if e.when > now]
+        future = [event for event in _candidates_for_day(day) if event.when > now]
         if future:
-            future.sort(key=lambda e: e.when)
+            future.sort(key=lambda event: event.when)
             return future[0]
-    # Should be unreachable — planner is scheduled every day, so there's
-    # always *some* event within 24h.
     raise RuntimeError("no upcoming scheduled events (unexpected)")
 
 
-async def _run_event(event: ScheduledEvent) -> None:
-    """Dispatch a single fired event."""
+def _label(event: ScheduledEvent) -> str:
+    if event.kind == "planner":
+        return "planner"
+    if event.kind == "hermes_task":
+        assert isinstance(event.payload, tuple)
+        return f"task '{event.payload[0]}'"
+    return f"slot {event.payload}"
+
+
+def _recorder_for_event(event: ScheduledEvent) -> TraceRecorder:
+    payload: dict[str, object] = {
+        "scheduled_for": event.when.isoformat(timespec="minutes"),
+        "label": _label(event),
+    }
+    if event.kind == "hermes_task":
+        assert isinstance(event.payload, tuple)
+        payload["title"] = event.payload[0]
+    elif event.kind == "hermes_slot":
+        payload["slot"] = event.payload
+
+    return TraceRecorder(
+        get_default_trace_sink(),
+        RunMeta(
+            run_kind=event.kind,
+            source="scheduler",
+            context=payload,
+        ),
+    )
+
+
+async def _run_event(event: ScheduledEvent, recorder: TraceRecorder) -> tuple[str, dict[str, object]]:
     if event.kind == "planner":
         from hermes.planner import run_planner
 
         try:
-            ok = await run_planner()
+            ok = await run_planner(trace_sink=get_default_trace_sink(), recorder=recorder)
             logger.info("[hermes-cron] planner 完成 (ok={})", ok)
-        except Exception:
+            return ("ok" if ok else "error", {"ok": ok})
+        except Exception as exc:
             logger.exception("[hermes-cron] planner 异常")
-        return
+            return ("error", {"error_type": type(exc).__name__, "error_message": str(exc)})
 
     if event.kind == "hermes_task":
         from hermes.runner import run_single_task
@@ -127,42 +117,56 @@ async def _run_event(event: ScheduledEvent) -> None:
         assert isinstance(event.payload, tuple)
         title, instruction = event.payload
         try:
-            ok = await asyncio.to_thread(run_single_task, title, instruction)
+            ok = await asyncio.to_thread(
+                run_single_task,
+                title,
+                instruction,
+                trace_recorder=recorder,
+            )
             logger.info("[hermes-cron] task '{}' 完成 (ok={})", title, ok)
-        except Exception:
+            return ("ok" if ok else "error", {"title": title, "ok": ok})
+        except Exception as exc:
             logger.exception("[hermes-cron] task '{}' 异常", title)
-        return
+            return (
+                "error",
+                {"title": title, "error_type": type(exc).__name__, "error_message": str(exc)},
+            )
 
-    if event.kind == "hermes_slot":
-        from hermes.runner import run_slot
+    from hermes.runner import run_slot
 
-        assert isinstance(event.payload, str)
-        slot_name = event.payload
-        try:
-            exit_code = await asyncio.to_thread(run_slot, slot_name)
-            logger.info("[hermes-cron] {} 完成 (exit={})", slot_name, exit_code)
-        except Exception:
-            logger.exception("[hermes-cron] {} 异常", slot_name)
-        return
+    assert isinstance(event.payload, str)
+    slot_name = event.payload
+    try:
+        exit_code = await asyncio.to_thread(run_slot, slot_name, trace_recorder=recorder)
+        logger.info("[hermes-cron] {} 完成 (exit={})", slot_name, exit_code)
+        return ("ok" if exit_code == 0 else "error", {"slot": slot_name, "exit_code": exit_code})
+    except Exception as exc:
+        logger.exception("[hermes-cron] {} 异常", slot_name)
+        return (
+            "error",
+            {"slot": slot_name, "error_type": type(exc).__name__, "error_message": str(exc)},
+        )
 
 
 async def _scheduler_loop() -> None:
-    # Default to deepseek-chat for Hermes tasks unless the user explicitly
-    # set HERMES_MODEL. Falling through to OPENAI_MODEL (often
-    # deepseek-reasoner) would make each task take ~30 minutes instead of ~4.
     os.environ.setdefault("HERMES_MODEL", "deepseek-chat")
 
     while True:
         event = _next_event(datetime.now())
         wait = (event.when - datetime.now()).total_seconds()
+        label = _label(event)
+        recorder = _recorder_for_event(event)
 
-        if event.kind == "planner":
-            label = "planner"
-        elif event.kind == "hermes_task":
-            assert isinstance(event.payload, tuple)
-            label = f"task '{event.payload[0]}'"
-        else:
-            label = f"slot {event.payload}"
+        await recorder.emit(
+            lane="scheduler",
+            type="schedule.next_computed",
+            status="ok",
+            summary=f"next scheduled event: {label}",
+            payload={
+                "wait_seconds": wait,
+                "scheduled_for": event.when.isoformat(timespec="minutes"),
+            },
+        )
 
         logger.info(
             "[hermes-cron] 下一次: {} at {} (在 {:.0f} 秒后)",
@@ -170,35 +174,34 @@ async def _scheduler_loop() -> None:
         )
         await asyncio.sleep(max(1.0, wait))
 
-        await _run_event(event)
+        await recorder.emit(
+            lane="scheduler",
+            type="schedule.fired",
+            status="ok",
+            summary=f"scheduled event fired: {label}",
+            payload={"fired_at": datetime.now().isoformat(timespec="seconds")},
+        )
+        status, payload = await _run_event(event, recorder)
+        await recorder.emit(
+            lane="scheduler",
+            type="schedule.finished",
+            status=status,
+            summary=f"scheduled event finished: {label}",
+            payload=payload,
+        )
 
 
 def start() -> asyncio.Task:
-    """Spawn the scheduler as a background task. Cancel it to stop."""
     return asyncio.create_task(_scheduler_loop(), name="anna-hermes-cron")
 
 
 async def stop(task: asyncio.Task) -> None:
-    """Cancel the scheduler task and await its clean shutdown.
-
-    Note: a task already running in a thread (via ``asyncio.to_thread``) will
-    continue to completion — Python can't kill threads. Ctrl+C during a task
-    therefore takes up to a few minutes to fully exit.
-    """
     task.cancel()
     try:
         await task
     except (asyncio.CancelledError, Exception):
         pass
 
-
-# ---------------------------------------------------------------------------
-# Standalone entry: ``python -m hermes.scheduler``
-#
-# Run the scheduler as its own process (no wechat dependency). Useful when
-# you want diary cron without the chat layer, or when debugging the
-# scheduler itself.
-# ---------------------------------------------------------------------------
 
 async def _standalone() -> None:
     from dotenv import load_dotenv
@@ -207,7 +210,7 @@ async def _standalone() -> None:
     logger.info("[hermes-cron] standalone scheduler started (Ctrl+C to stop)")
     task = start()
     try:
-        await task  # block forever unless task crashes
+        await task
     except asyncio.CancelledError:
         pass
 

@@ -14,9 +14,10 @@ from pathlib import Path
 # Single source of truth: defined in ``core/diary.py`` (Anna reads),
 # re-exported here for ``hermes/`` writers. Keeps the path in one place.
 from core.diary import DIARY_DIR
+from core.trace import TraceRecorder
 
 
-def append_entry(title: str, content: str) -> Path:
+def append_entry(title: str, content: str, *, trace_recorder: TraceRecorder | None = None) -> Path:
     """Append a diary entry to today's file with timestamped header."""
     DIARY_DIR.mkdir(parents=True, exist_ok=True)
     path = DIARY_DIR / f"{datetime.now().date().isoformat()}.md"
@@ -36,5 +37,21 @@ def append_entry(title: str, content: str) -> Path:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
         raise
+
+    if trace_recorder is not None:
+        trace_recorder.emit_sync(
+            lane="artifact",
+            type="diary.appended",
+            status="ok",
+            summary=f"diary appended: {title}",
+            payload={"title": title, "path": str(path)},
+        )
+        trace_recorder.emit_sync(
+            lane="artifact",
+            type="artifact.written",
+            status="ok",
+            summary=f"diary written: {path.name}",
+            payload={"artifact_kind": "diary", "path": str(path), "title": title},
+        )
 
     return path

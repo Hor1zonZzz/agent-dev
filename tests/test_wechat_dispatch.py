@@ -1,14 +1,4 @@
-"""WeChat dispatch/worker concurrency tests.
-
-Verifies that dispatch_reply routes correctly and the worker handles:
-  - idle enqueue
-  - non-blocking dispatch during run
-  - mid-run interrupt via ctx.inbox
-  - greedy batch merge
-  - straggler salvage (message landing in ctx.inbox after last LLM turn)
-
-Run:  uv run python -m pytest tests/test_wechat_dispatch.py -v
-"""
+"""WeChat dispatch/worker concurrency tests."""
 
 from __future__ import annotations
 
@@ -23,39 +13,33 @@ from core.loop import RunResult
 
 
 def _mk_msg(text: str, user_id: str = "u1", token: str = "tok") -> MagicMock:
-    m = MagicMock()
-    m.body = text
-    m.from_user = user_id
-    m.context_token = token
-    return m
+    message = MagicMock()
+    message.body = text
+    message.from_user = user_id
+    message.context_token = token
+    return message
 
 
-def _ok_result(input_msgs: list[dict]) -> RunResult:
-    return RunResult(
-        messages=[{"role": "system", "content": "sys"}] + list(input_msgs),
-        final_output="",
-        last_tool=None,
-    )
+def _ok_result() -> RunResult:
+    return RunResult(messages=[], final_output="", last_tool=None, run_id="run_1", trace_seq=1)
 
 
 @pytest.fixture(autouse=True)
 def isolate_module_state(monkeypatch):
-    """Reset wechat queues + disable disk/network I/O for each test."""
     monkeypatch.setattr(wechat, "_inbox", asyncio.Queue())
     monkeypatch.setattr(wechat, "_active_ctx", None)
-
-    monkeypatch.setattr(wechat, "load_for_llm", lambda path: ([], None))
-    monkeypatch.setattr(wechat, "append_to_history", lambda path, msgs: None)
-    monkeypatch.setattr(wechat, "maybe_compress", AsyncMock(return_value=None))
+    monkeypatch.setattr(wechat, "_active_user_id", None)
+    monkeypatch.setattr(wechat, "update_dispatch_info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(wechat, "get_dispatch_info", lambda path: ("u1", "tok"))
     monkeypatch.setattr(
-        wechat, "_build_reply_fn",
+        wechat,
+        "_build_reply_fn",
         lambda uid, tok: AsyncMock(return_value=None),
     )
     yield
 
 
 async def _drive(worker_task: asyncio.Task, tick: float = 0.05) -> None:
-    """Yield briefly so the worker can make progress, then cancel it."""
     await asyncio.sleep(tick)
     worker_task.cancel()
     try:
@@ -64,15 +48,15 @@ async def _drive(worker_task: asyncio.Task, tick: float = 0.05) -> None:
         pass
 
 
-# ─────────────────────────── tests ───────────────────────────
-
-
 def test_dispatch_when_idle_enqueues_to_inbox():
     async def body():
         await wechat.dispatch_reply(_mk_msg("hi"))
         assert wechat._inbox.qsize() == 1
-        uid, text, tok, is_proactive = wechat._inbox.get_nowait()
-        assert (uid, text, tok, is_proactive) == ("u1", "hi", "tok", False)
+        item = wechat._inbox.get_nowait()
+        assert item.user_id == "u1"
+        assert item.text == "hi"
+        assert item.context_token == "tok"
+        assert item.is_proactive is False
 
     asyncio.run(body())
 
@@ -87,13 +71,13 @@ def test_dispatch_ignores_blank_messages():
 
 
 def test_worker_consumes_queued_message(monkeypatch):
-    captured: list[list[dict]] = []
+    captured: list[list[str]] = []
 
-    async def fake_run(agent, input_msgs, *, ctx, hooks=None):
-        captured.append(list(input_msgs))
-        return _ok_result(input_msgs)
+    async def fake_process(request):
+        captured.append(list(request.incoming_messages))
+        return _ok_result()
 
-    monkeypatch.setattr(wechat, "run", fake_run)
+    monkeypatch.setattr(wechat._session_runner, "process", fake_process)
 
     async def body():
         task = asyncio.create_task(wechat.worker())
@@ -102,25 +86,24 @@ def test_worker_consumes_queued_message(monkeypatch):
 
     asyncio.run(body())
 
-    assert captured == [[{"role": "user", "content": "hello"}]]
+    assert captured == [["hello"]]
 
 
 def test_dispatch_is_non_blocking_during_run(monkeypatch):
-    """While run() is in flight, dispatch_reply must return near-instantly."""
     run_started = asyncio.Event()
     run_release = asyncio.Event()
 
-    async def slow_run(agent, input_msgs, *, ctx, hooks=None):
+    async def slow_process(request):
         run_started.set()
         await run_release.wait()
-        return _ok_result(input_msgs)
+        return _ok_result()
 
-    monkeypatch.setattr(wechat, "run", slow_run)
+    monkeypatch.setattr(wechat._session_runner, "process", slow_process)
 
     async def body():
         task = asyncio.create_task(wechat.worker())
         await wechat.dispatch_reply(_mk_msg("first"))
-        await run_started.wait()  # run is now in-flight
+        await run_started.wait()
 
         t0 = time.perf_counter()
         await wechat.dispatch_reply(_mk_msg("second"))
@@ -138,19 +121,17 @@ def test_dispatch_is_non_blocking_during_run(monkeypatch):
 
 
 def test_mid_run_messages_go_to_ctx_inbox(monkeypatch):
-    """Messages arriving during run() must land in ctx.inbox in arrival order."""
     run_started = asyncio.Event()
     drained: list[str] = []
 
-    async def fake_run(agent, input_msgs, *, ctx, hooks=None):
+    async def fake_process(request):
         run_started.set()
-        # Let dispatches happen, then drain the inbox like loop.py would.
         await asyncio.sleep(0.03)
-        while not ctx.inbox.empty():
-            drained.append(ctx.inbox.get_nowait())
-        return _ok_result(input_msgs)
+        while not request.ctx.inbox.empty():
+            drained.append(request.ctx.inbox.get_nowait())
+        return _ok_result()
 
-    monkeypatch.setattr(wechat, "run", fake_run)
+    monkeypatch.setattr(wechat._session_runner, "process", fake_process)
 
     async def body():
         task = asyncio.create_task(wechat.worker())
@@ -165,18 +146,16 @@ def test_mid_run_messages_go_to_ctx_inbox(monkeypatch):
     assert drained == ["second", "third"]
 
 
-def test_greedy_batch_merges_queued_messages(monkeypatch):
-    """Messages queued before worker starts must collapse into one run."""
-    captured: list[list[dict]] = []
+def test_greedy_batch_merges_same_user_messages(monkeypatch):
+    captured: list[list[str]] = []
 
-    async def fake_run(agent, input_msgs, *, ctx, hooks=None):
-        captured.append(list(input_msgs))
-        return _ok_result(input_msgs)
+    async def fake_process(request):
+        captured.append(list(request.incoming_messages))
+        return _ok_result()
 
-    monkeypatch.setattr(wechat, "run", fake_run)
+    monkeypatch.setattr(wechat._session_runner, "process", fake_process)
 
     async def body():
-        # Pre-fill the inbox before worker starts.
         await wechat.dispatch_reply(_mk_msg("a"))
         await wechat.dispatch_reply(_mk_msg("b"))
         await wechat.dispatch_reply(_mk_msg("c"))
@@ -186,25 +165,21 @@ def test_greedy_batch_merges_queued_messages(monkeypatch):
 
     asyncio.run(body())
 
-    assert len(captured) == 1, f"expected 1 run, got {len(captured)}"
-    assert captured[0] == [
-        {"role": "user", "content": "a"},
-        {"role": "user", "content": "b"},
-        {"role": "user", "content": "c"},
-    ]
+    assert captured == [["a", "b", "c"]]
 
 
 def test_active_ctx_cleared_after_run(monkeypatch):
-    async def fast_run(agent, input_msgs, *, ctx, hooks=None):
-        return _ok_result(input_msgs)
+    async def fast_process(request):
+        return _ok_result()
 
-    monkeypatch.setattr(wechat, "run", fast_run)
+    monkeypatch.setattr(wechat._session_runner, "process", fast_process)
 
     async def body():
         task = asyncio.create_task(wechat.worker())
         await wechat.dispatch_reply(_mk_msg("x"))
         await asyncio.sleep(0.05)
         assert wechat._active_ctx is None
+        assert wechat._active_user_id is None
         task.cancel()
         try:
             await task
@@ -215,18 +190,15 @@ def test_active_ctx_cleared_after_run(monkeypatch):
 
 
 def test_stragglers_in_ctx_inbox_trigger_next_run(monkeypatch):
-    """If a message lands in ctx.inbox after the last LLM turn (i.e., run
-    returned without draining it), the worker must salvage + re-run."""
-    run_calls: list[list[dict]] = []
+    run_calls: list[list[str]] = []
 
-    async def fake_run(agent, input_msgs, *, ctx, hooks=None):
-        run_calls.append(list(input_msgs))
+    async def fake_process(request):
+        run_calls.append(list(request.incoming_messages))
         if len(run_calls) == 1:
-            # Simulate a straggler: put into ctx.inbox just before returning.
-            ctx.inbox.put_nowait("straggler")
-        return _ok_result(input_msgs)
+            request.ctx.inbox.put_nowait("straggler")
+        return _ok_result()
 
-    monkeypatch.setattr(wechat, "run", fake_run)
+    monkeypatch.setattr(wechat._session_runner, "process", fake_process)
 
     async def body():
         task = asyncio.create_task(wechat.worker())
@@ -235,32 +207,56 @@ def test_stragglers_in_ctx_inbox_trigger_next_run(monkeypatch):
 
     asyncio.run(body())
 
-    assert len(run_calls) == 2
-    assert run_calls[0] == [{"role": "user", "content": "hi"}]
-    assert run_calls[1] == [{"role": "user", "content": "straggler"}]
+    assert run_calls == [["hi"], ["straggler"]]
 
 
-def test_history_appended_before_active_ctx_cleared(monkeypatch):
-    """Regression: append_to_history must run before _active_ctx = None, so
-    any straggler sees the persisted history on its next load."""
-    order: list[str] = []
+def test_different_user_during_active_run_stays_in_queue(monkeypatch):
+    run_started = asyncio.Event()
+    run_release = asyncio.Event()
 
-    async def fake_run(agent, input_msgs, *, ctx, hooks=None):
-        return _ok_result(input_msgs)
+    async def slow_process(request):
+        run_started.set()
+        await run_release.wait()
+        return _ok_result()
 
-    def fake_append(path, msgs):
-        order.append("append")
-        # At this moment, worker is still inside the try block → _active_ctx set
-        assert wechat._active_ctx is not None, "_active_ctx cleared too early"
-
-    monkeypatch.setattr(wechat, "run", fake_run)
-    monkeypatch.setattr(wechat, "append_to_history", fake_append)
+    monkeypatch.setattr(wechat._session_runner, "process", slow_process)
 
     async def body():
         task = asyncio.create_task(wechat.worker())
-        await wechat.dispatch_reply(_mk_msg("x"))
+        await wechat.dispatch_reply(_mk_msg("u1-first", user_id="u1"))
+        await run_started.wait()
+        await wechat.dispatch_reply(_mk_msg("u2-msg", user_id="u2"))
+
+        assert wechat._active_ctx is not None
+        assert wechat._active_user_id == "u1"
+        assert wechat._active_ctx.inbox.empty()
+        assert wechat._inbox.qsize() == 1
+        queued = wechat._inbox.get_nowait()
+        assert queued.user_id == "u2"
+        assert queued.text == "u2-msg"
+
+        wechat._inbox.put_nowait(queued)
+        run_release.set()
         await _drive(task)
 
     asyncio.run(body())
 
-    assert order == ["append"]
+
+def test_stale_proactive_trigger_is_dropped_when_real_message_waits(monkeypatch):
+    captured: list[list[str]] = []
+
+    async def fake_process(request):
+        captured.append(list(request.incoming_messages))
+        return _ok_result()
+
+    monkeypatch.setattr(wechat._session_runner, "process", fake_process)
+
+    async def body():
+        await wechat._inbox.put(wechat.DispatchItem("u1", "proactive", "tok", True))
+        await wechat._inbox.put(wechat.DispatchItem("u1", "real", "tok", False))
+        task = asyncio.create_task(wechat.worker())
+        await _drive(task, tick=0.1)
+
+    asyncio.run(body())
+
+    assert captured == [["real"]]

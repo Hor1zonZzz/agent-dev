@@ -185,7 +185,7 @@ class _SavePlanParams(BaseModel):
     )
 
 
-def _save_plan(tasks: list[dict]) -> str:
+def _save_plan(ctx, tasks: list[dict]) -> str:
     # ``core/tool.py`` calls ``parsed.model_dump()``, which recursively turns
     # nested Pydantic models into plain dicts before invoking the function.
     # Re-hydrate them here so validate_tasks sees real PlanTask objects.
@@ -203,6 +203,30 @@ def _save_plan(tasks: list[dict]) -> str:
     # planner was triggered (scheduled 23:00 or a manual debug run).
     day = (datetime.now() + timedelta(days=1)).date()
     path = write_plan(day, plan_tasks)
+    recorder = getattr(ctx, "trace_recorder", None)
+    if recorder is not None:
+        recorder.emit_sync(
+            lane="artifact",
+            type="plan.saved",
+            status="ok",
+            summary=f"plan saved for {day.isoformat()}",
+            payload={
+                "path": str(path),
+                "task_count": len(plan_tasks),
+                "date": day.isoformat(),
+            },
+        )
+        recorder.emit_sync(
+            lane="artifact",
+            type="artifact.written",
+            status="ok",
+            summary=f"plan written: {path.name}",
+            payload={
+                "artifact_kind": "plan",
+                "path": str(path),
+                "task_count": len(plan_tasks),
+            },
+        )
     return f"已保存 {len(plan_tasks)} 条任务到 {path.name}。"
 
 
