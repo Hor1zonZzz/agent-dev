@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+  <div class="panel-title">
+    <h1>Run Summary</h1>
+    <a class="link-back" href="/traces">返回列表</a>
+  </div>
+  <div class="summary-grid">
+    <div><span class="label">Run ID</span><code>{{ payload.run.run_id }}</code></div>
+    <div><span class="label">Kind</span><span>{{ payload.run.run_kind }}</span></div>
+    <div><span class="label">Source</span><span>{{ payload.run.source }}</span></div>
+    <div><span class="label">Session</span><span>{{ payload.run.session_id or "-" }}</span></div>
+    <div><span class="label">Started</span><span>{{ payload.run.started_at_label }}</span></div>
+    <div><span class="label">Finished</span><span>{{ payload.run.finished_at_label }}</span></div>
+    <div><span class="label">Duration</span><span>{{ payload.run.duration_label }}</span></div>
+    <div><span class="label">Status</span><span class="status status-{{ payload.run.status }}">{{ payload.run.status }}</span></div>
+    <div><span class="label">Events</span><span>{{ payload.run.event_count }}</span></div>
+    <div><span class="label">Tools</span><span>{{ payload.summary.tool_count }}</span></div>
+    <div><span class="label">Artifacts</span><span>{{ payload.summary.artifact_count }}</span></div>
+  </div>
+  <div class="lane-row">
+    {% for lane, count in payload.summary.lane_counts.items() %}
+      <span class="lane-tag lane-{{ lane }}">{{ lane }} {{ count }}</span>
+    {% endfor %}
+  </div>
+</section>
+
+{% if payload.errors %}
+  <section class="panel error-panel">
+    <div class="panel-title">
+      <h2>Errors</h2>
+      <p class="subtle">{{ payload.errors|length }} error event(s)</p>
+    </div>
+    {% for error in payload.errors %}
+      <article class="error-item">
+        <div class="error-head">
+          <span>{{ error.ts_label }}</span>
+          <code>{{ error.type }}</code>
+        </div>
+        <p>{{ error.summary }}</p>
+        <details>
+          <summary>Payload</summary>
+          <pre>{{ error.payload | tojson(indent=2) }}</pre>
+        </details>
+      </article>
+    {% endfor %}
+  </section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-title">
+    <h2>Timeline</h2>
+    <p class="subtle">{{ payload.timeline|length }} item(s)</p>
+  </div>
+  <div class="timeline">
+    {% for item in payload.timeline %}
+      <article class="timeline-item">
+        <div class="timeline-rail lane-{{ item.lane }}"></div>
+        <div class="timeline-card">
+          <div class="timeline-head">
+            <div>
+              <span class="status status-{{ item.status }}">{{ item.status }}</span>
+              <strong>{{ item.type }}</strong>
+            </div>
+            <span class="subtle">{{ item.ts_label }}</span>
+          </div>
+          <p>{{ item.summary }}</p>
+          <details>
+            <summary>Payload / Raw Events</summary>
+            <div class="detail-stack">
+              <pre>{{ item.payload | tojson(indent=2) }}</pre>
+              <pre>{{ item.raw_events | tojson(indent=2) }}</pre>
+            </div>
+          </details>
+        </div>
+      </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-title">
+    <h2>Related Artifacts</h2>
+    <p class="subtle">{{ payload.artifacts|length }} file(s)</p>
+  </div>
+  {% if payload.artifacts %}
+    <div class="artifact-list">
+      {% for artifact in payload.artifacts %}
+        <a class="artifact-card" href="{{ artifact.preview_url }}" target="_blank" rel="noreferrer">
+          <div class="chips">
+            <span class="chip">{{ artifact.artifact_kind or "artifact" }}</span>
+            {% for event_type in artifact.event_types %}
+              <span class="chip">{{ event_type }}</span>
+            {% endfor %}
+          </div>
+          <code>{{ artifact.relative_path }}</code>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="subtle">这个 run 没有留下可预览的 artifact。</p>
+  {% endif %}
+</section>
+{% endblock %}

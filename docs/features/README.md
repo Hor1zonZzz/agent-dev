@@ -8,6 +8,7 @@
 | 工具系统 | [tools.md](tools.md) |
 | Prompt 组装 | [prompt-build.md](prompt-build.md) |
 | Trace 可观测性 | [trace-observability.md](trace-observability.md) |
+| Trace WebUI | [trace-webui.md](trace-webui.md) |
 | 对话历史持久化 | [history-persistence.md](history-persistence.md) |
 | Memory 压缩 | [memory-compression.md](memory-compression.md) |
 | 生命周期 Hooks（已废弃） | [hooks.md](hooks.md) |

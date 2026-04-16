@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+  <div class="panel-title">
+    <div>
+      <h1>Artifact Preview</h1>
+      <p class="subtle">{{ payload.artifact_kind }} · {{ payload.relative_path }}</p>
+    </div>
+    <a class="link-back" href="/traces">返回列表</a>
+  </div>
+
+  <pre class="preview-block">{{ payload.content_preview }}</pre>
+
+  {% if payload.truncated %}
+    <details class="expand-full">
+      <summary>展开完整内容</summary>
+      <pre class="preview-block">{{ payload.full_content }}</pre>
+    </details>
+  {% endif %}
+</section>
+{% endblock %}

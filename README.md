@@ -33,3 +33,11 @@ uv run python wechat.py setup
 # 启动消息监听
 uv run python wechat.py
 ```
+
+### 5. Trace WebUI
+
+```bash
+uv run python -m webui.app
+```
+
+默认监听 `127.0.0.1:8000`，打开 `http://127.0.0.1:8000/traces` 可以查看本机只读的执行轨迹时间线。

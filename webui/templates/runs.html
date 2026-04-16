@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+  <form class="filters" method="get" action="/traces">
+    <label>
+      <span>Day</span>
+      <input type="date" name="day" value="{{ payload.filters.day }}">
+    </label>
+    <label>
+      <span>Run Kind</span>
+      <input type="text" name="run_kind" value="{{ payload.filters.run_kind }}" placeholder="wechat_chat">
+    </label>
+    <label>
+      <span>Source</span>
+      <input type="text" name="source" value="{{ payload.filters.source }}" placeholder="wechat">
+    </label>
+    <label>
+      <span>Status</span>
+      <input type="text" name="status" value="{{ payload.filters.status }}" placeholder="ok/error">
+    </label>
+    <label>
+      <span>Session</span>
+      <input type="text" name="session_id" value="{{ payload.filters.session_id }}" placeholder="u1">
+    </label>
+    <label>
+      <span>Limit</span>
+      <input type="number" min="1" max="200" name="limit" value="{{ payload.filters.limit }}">
+    </label>
+    <button type="submit">Apply</button>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-title">
+    <h1>Runs</h1>
+    <p class="subtle">{{ payload.count }} run(s)</p>
+  </div>
+
+  {% if payload.empty %}
+    <div class="empty-state">
+      <h2>还没有 trace run</h2>
+      <p>启动 `wechat.py`、planner 或其他运行入口后，这里会显示新的执行轨迹。</p>
+    </div>
+  {% else %}
+    <div class="run-list">
+      {% for run in payload.runs %}
+        <a class="run-card status-{{ run.status }}" href="/traces/{{ run.run_id }}">
+          <div class="run-card-top">
+            <div class="chips">
+              <span class="chip">{{ run.run_kind }}</span>
+              <span class="chip">{{ run.source }}</span>
+              {% if run.session_id %}
+                <span class="chip">{{ run.session_id }}</span>
+              {% endif %}
+            </div>
+            <span class="status status-{{ run.status }}">{{ run.status }}</span>
+          </div>
+          <h2>{{ run.summary }}</h2>
+          <div class="run-metrics">
+            <span>开始 {{ run.started_at_label }}</span>
+            <span>耗时 {{ run.duration_label }}</span>
+            <span>{{ run.event_count }} events</span>
+            <span>{{ run.tool_count }} tools</span>
+            <span>{{ run.artifact_count }} artifacts</span>
+          </div>
+          <div class="lane-row">
+            {% for lane, count in run.lane_counts.items() %}
+              <span class="lane-tag lane-{{ lane }}">{{ lane }} {{ count }}</span>
+            {% endfor %}
+          </div>
+          {% if run.first_error %}
+            <p class="error-callout">首个错误: {{ run.first_error.summary }}</p>
+          {% endif %}
+        </a>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+{% endblock %}
